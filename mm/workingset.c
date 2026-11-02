@@ -293,7 +293,13 @@ void lru_gen_refault(struct page *page, void *shadow)
 	hist = lru_hist_from_seq(min_seq);
 	tier = lru_tier_from_refs(refs + workingset);
 	atomic_long_add(delta, &lrugen->refaulted[hist][type][tier]);
-	mod_lruvec_state(lruvec, WORKINGSET_REFAULT, delta);
+	/*
+	 * Legacy 4.19 counters describe file-cache pages. Android LMKD uses
+	 * this counter to estimate file-cache thrashing. Keep anonymous
+	 * feedback in the separate per-type MGLRU arrays above.
+	 */
+	if (type == LRU_GEN_FILE)
+		mod_lruvec_state(lruvec, WORKINGSET_REFAULT, delta);
 
 	/*
 	 * Count the following two cases as stalls:
@@ -304,7 +310,8 @@ void lru_gen_refault(struct page *page, void *shadow)
 	 */
 	if (lru_gen_in_fault() || refs + workingset == BIT(LRU_REFS_WIDTH)) {
 		SetPageWorkingset(page);
-		mod_lruvec_state(lruvec, WORKINGSET_RESTORE, delta);
+		if (type == LRU_GEN_FILE)
+			mod_lruvec_state(lruvec, WORKINGSET_RESTORE, delta);
 	}
 unlock:
 	rcu_read_unlock();

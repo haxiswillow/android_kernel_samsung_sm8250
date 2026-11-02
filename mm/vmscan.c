@@ -4201,7 +4201,9 @@ static bool sort_page(struct lruvec *lruvec, struct page *page, int tier_idx)
 
 		WRITE_ONCE(lrugen->protected[hist][type][tier - 1],
 			   lrugen->protected[hist][type][tier - 1] + delta);
-		__mod_lruvec_state(lruvec, WORKINGSET_ACTIVATE, delta);
+		/* Preserve the file-only legacy 4.19 vmstat ABI. */
+		if (type == LRU_GEN_FILE)
+			__mod_lruvec_state(lruvec, WORKINGSET_ACTIVATE, delta);
 		return true;
 	}
 
