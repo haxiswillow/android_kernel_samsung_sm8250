@@ -8780,8 +8780,8 @@
 				booster_key@3 {
 					input_booster,label = "touch";
 					input_booster,type = <0x2>;
-					input_booster,head_time = <0xc8>;
-					input_booster,tail_time = <0x12c>;
+					input_booster,head_time = <0x50>;
+					input_booster,tail_time = <0x28>;
 
 					inputbooster,resource {
 						compatible = "resource";
@@ -8793,12 +8793,12 @@
 
 						resource@2 {
 							resource,label = "DDR";
-							resource,value = <0x3f9 0x3f9>;
+							resource,value = <0x1c3 0x0>;
 						};
 
 						resource@3 {
 							resource,label = "HMP";
-							resource,value = <0x2 0x2>;
+							resource,value = <0x0 0x0>;
 						};
 
 						resource@4 {
@@ -8811,8 +8811,8 @@
 				booster_key@4 {
 					input_booster,label = "multitouch";
 					input_booster,type = <0x3>;
-					input_booster,head_time = <0xc8>;
-					input_booster,tail_time = <0x320>;
+					input_booster,head_time = <0x50>;
+					input_booster,tail_time = <0x28>;
 
 					inputbooster,resource {
 						compatible = "resource";
@@ -8824,12 +8824,12 @@
 
 						resource@2 {
 							resource,label = "DDR";
-							resource,value = <0x0 0x0>;
+							resource,value = <0x1c3 0x0>;
 						};
 
 						resource@3 {
 							resource,label = "HMP";
-							resource,value = <0x2 0x2>;
+							resource,value = <0x0 0x0>;
 						};
 
 						resource@4 {

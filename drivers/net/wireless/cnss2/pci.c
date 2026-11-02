@@ -930,16 +930,12 @@ EXPORT_SYMBOL(cnss_pci_link_down);
 
 int cnss_pci_get_reg_dump(struct device *dev, uint8_t *buffer, uint32_t len)
 {
-	struct pci_dev *pci_dev = to_pci_dev(dev);
-
-	if (!pci_dev) {
-		cnss_pr_err("pci_dev is NULL\n");
+	if (!dev || !buffer || !len)
 		return -EINVAL;
-	}
 
-	cnss_pr_dbg("Get pci reg dump for hang data\n");
-
-	return msm_pcie_reg_dump(pci_dev, buffer, len);
+	/* This tree's PCIe controller does not implement msm_pcie_reg_dump. */
+	cnss_pr_dbg("PCIe hang-register dump is not supported\n");
+	return -EOPNOTSUPP;
 }
 EXPORT_SYMBOL(cnss_pci_get_reg_dump);
 

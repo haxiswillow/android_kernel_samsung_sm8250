@@ -58,6 +58,7 @@ struct devfreq_msm_adreno_tz_data {
 		uint64_t *ib;
 		bool floating;
 	} bus;
+	u32 mushroom_down_us;
 	unsigned int device_id;
 	bool is_64;
 	bool disable_busy_time_burst;

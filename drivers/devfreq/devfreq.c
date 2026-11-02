@@ -11,6 +11,7 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/module.h>
 #include <linux/kmod.h>
 #include <linux/sched.h>
 #include <linux/errno.h>
@@ -28,6 +29,68 @@
 #include <linux/hrtimer.h>
 #include <linux/of.h>
 #include "governor.h"
+#include <linux/mushroom_dvfs.h>
+
+/* Own only userspace performance limits. OPP/thermal scaling limits win. */
+static bool mushroom_gpu_native = true;
+module_param_named(mushroom_gpu_native, mushroom_gpu_native, bool, 0644);
+MODULE_PARM_DESC(mushroom_gpu_native, "Kernel-owned GPU governor and user limits; thermal limits remain active");
+static bool mushroom_ddr_native = true;
+module_param_named(mushroom_ddr_native, mushroom_ddr_native, bool, 0644);
+MODULE_PARM_DESC(mushroom_ddr_native, "Keep the CPU DDR bandwidth ceiling at the highest supported native OPP");
+
+bool mushroom_gpu_kernel_policy(void)
+{
+	return READ_ONCE(mushroom_gpu_native);
+}
+EXPORT_SYMBOL_GPL(mushroom_gpu_kernel_policy);
+
+static bool mushroom_gpu_df(struct devfreq *df)
+{
+	return mushroom_gpu_kernel_policy() &&
+		strstr(dev_name(df->dev.parent), "kgsl-3d0");
+}
+
+static unsigned long mushroom_native_limit(struct devfreq *df, bool maximum)
+{
+	unsigned long limit = maximum ? 0 : ULONG_MAX;
+	const char *name = dev_name(df->dev.parent);
+	bool gpu = mushroom_gpu_df(df);
+	bool ddr = READ_ONCE(mushroom_ddr_native) &&
+		strstr(name, "cpu-llcc-ddr-bw");
+	unsigned int i;
+
+	if (!gpu && !(maximum && ddr))
+		return 0;
+	for (i = 0; i < df->profile->max_state; i++) {
+		unsigned long f = df->profile->freq_table[i];
+
+		if (f)
+			limit = maximum ? max(limit, f) : min(limit, f);
+	}
+	if (ddr && limit != 7980 && limit != 10437)
+		return 0;
+	return limit == ULONG_MAX ? 0 : limit;
+}
+
+static bool mushroom_trace_limits;
+module_param_named(mushroom_trace_limits, mushroom_trace_limits, bool, 0644);
+MODULE_PARM_DESC(mushroom_trace_limits, "Temporarily trace GPU/CPU-DDR sysfs limit writers");
+
+static void mushroom_trace_limit(struct devfreq *df, const char *limit,
+				unsigned long value)
+{
+	const char *name;
+
+	if (!READ_ONCE(mushroom_trace_limits))
+		return;
+	name = dev_name(df->dev.parent);
+	if (!strstr(name, "kgsl") && !strstr(name, "cpu-llcc-ddr-bw"))
+		return;
+	pr_info_ratelimited("mushroom-dvfs: %s %s=%lu pid=%d comm=%s user_min=%lu user_max=%lu scaling_max=%lu\n",
+		name, limit, value, task_pid_nr(current), current->comm,
+		df->min_freq, df->max_freq, df->scaling_max_freq);
+}
 
 #define MAX(a,b)	((a > b) ? a : b)
 #define MIN(a,b)	((a < b) ? a : b)
@@ -312,6 +375,16 @@ int update_devfreq(struct devfreq *devfreq)
 
 	if (!devfreq->governor)
 		return -EINVAL;
+
+	/* Governors such as bw_hwmon also inspect these user bounds internally.
+	 * Publish the owned native range before asking for their target.
+	 */
+	max_freq = mushroom_native_limit(devfreq, true);
+	if (max_freq)
+		devfreq->max_freq = max_freq;
+	min_freq = mushroom_native_limit(devfreq, false);
+	if (min_freq)
+		devfreq->min_freq = min_freq;
 
 	/* Reevaluate the proper frequency */
 	err = devfreq->governor->get_target_freq(devfreq, &freq);
@@ -1060,6 +1133,9 @@ static ssize_t governor_store(struct device *dev, struct device_attribute *attr,
 	if (ret != 1)
 		return -EINVAL;
 
+	if (mushroom_gpu_df(df) && strcmp(str_governor, "msm-adreno-tz"))
+		return -EBUSY;
+
 	mutex_lock(&devfreq_list_lock);
 	governor = try_then_request_governor(str_governor);
 	if (IS_ERR(governor)) {
@@ -1215,10 +1291,15 @@ static ssize_t min_freq_store(struct device *dev, struct device_attribute *attr,
 	struct devfreq *df = to_devfreq(dev);
 	unsigned long value;
 	int ret;
+	unsigned long native;
 
 	ret = sscanf(buf, "%lu", &value);
 	if (ret != 1)
 		return -EINVAL;
+
+	native = mushroom_native_limit(df, false);
+	if (native && value && value != native)
+		return -EBUSY;
 
 	mutex_lock(&df->event_lock);
 	mutex_lock(&df->lock);
@@ -1239,6 +1320,7 @@ static ssize_t min_freq_store(struct device *dev, struct device_attribute *attr,
 	}
 
 	df->min_freq = value;
+	mushroom_trace_limit(df, "min", value);
 	update_devfreq(df);
 	ret = count;
 unlock:
@@ -1251,8 +1333,9 @@ static ssize_t min_freq_show(struct device *dev, struct device_attribute *attr,
 			     char *buf)
 {
 	struct devfreq *df = to_devfreq(dev);
+	unsigned long native = mushroom_native_limit(df, false);
 
-	return sprintf(buf, "%lu\n", MAX(df->scaling_min_freq, df->min_freq));
+	return sprintf(buf, "%lu\n", MAX(df->scaling_min_freq, (native ? native : df->min_freq)));
 }
 
 static ssize_t max_freq_store(struct device *dev, struct device_attribute *attr,
@@ -1261,10 +1344,15 @@ static ssize_t max_freq_store(struct device *dev, struct device_attribute *attr,
 	struct devfreq *df = to_devfreq(dev);
 	unsigned long value;
 	int ret;
+	unsigned long native;
 
 	ret = sscanf(buf, "%lu", &value);
 	if (ret != 1)
 		return -EINVAL;
+
+	native = mushroom_native_limit(df, true);
+	if (native && value && value != native)
+		return -EBUSY;
 
 	mutex_lock(&df->event_lock);
 	mutex_lock(&df->lock);
@@ -1285,6 +1373,7 @@ static ssize_t max_freq_store(struct device *dev, struct device_attribute *attr,
 	}
 
 	df->max_freq = value;
+	mushroom_trace_limit(df, "max", value);
 	update_devfreq(df);
 	ret = count;
 unlock:
@@ -1298,10 +1387,28 @@ static ssize_t max_freq_show(struct device *dev, struct device_attribute *attr,
 			     char *buf)
 {
 	struct devfreq *df = to_devfreq(dev);
+	unsigned long native = mushroom_native_limit(df, true);
 
-	return sprintf(buf, "%lu\n", MIN(df->scaling_max_freq, df->max_freq));
+	return sprintf(buf, "%lu\n", MIN(df->scaling_max_freq, (native ? native : df->max_freq)));
 }
 static DEVICE_ATTR_RW(max_freq);
+
+static ssize_t mushroom_limits_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct devfreq *df = to_devfreq(dev);
+	ssize_t len;
+
+	mutex_lock(&df->lock);
+	len = scnprintf(buf, PAGE_SIZE,
+		"user_min=%lu user_max=%lu scaling_min=%lu scaling_max=%lu previous=%lu\n",
+		df->min_freq, df->max_freq, df->scaling_min_freq,
+		df->scaling_max_freq, df->previous_freq);
+	mutex_unlock(&df->lock);
+	return len;
+}
+static DEVICE_ATTR_RO(mushroom_limits);
+
 
 static ssize_t available_frequencies_show(struct device *d,
 					  struct device_attribute *attr,
@@ -1387,6 +1494,7 @@ static struct attribute *devfreq_attrs[] = {
 	&dev_attr_polling_interval.attr,
 	&dev_attr_min_freq.attr,
 	&dev_attr_max_freq.attr,
+	&dev_attr_mushroom_limits.attr,
 	&dev_attr_trans_stat.attr,
 	NULL,
 };

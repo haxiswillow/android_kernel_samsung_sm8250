@@ -43,7 +43,11 @@ CFLAGS_cfi.o = $(DISABLE_CFI_CLANG)
 # Don't instrument error handlers
 CFLAGS_cfi.o = $(DISABLE_CFI_CLANG)
 
+ifeq ($(CONFIG_MUSHROOM_SCHED54),y)
+obj-y += sched54/
+else
 obj-y += sched/
+endif
 obj-y += locking/
 obj-y += power/
 obj-y += printk/
@@ -128,7 +132,7 @@ obj-$(CONFIG_RSEQ) += rseq.o
 $(obj)/configs.o: $(obj)/config_data.h
 
 targets += config_data.gz
-$(obj)/config_data.gz: out/.config FORCE
+$(obj)/config_data.gz: $(KCONFIG_CONFIG) FORCE
 	$(call if_changed,gzip)
 
       filechk_ikconfiggz = (echo "static const char kernel_config_data[] __used = MAGIC_START"; cat $< | scripts/bin2c; echo "MAGIC_END;")

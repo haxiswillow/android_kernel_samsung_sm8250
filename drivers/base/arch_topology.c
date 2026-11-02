@@ -16,6 +16,9 @@
 #include <linux/string.h>
 #include <linux/sched/topology.h>
 #include <linux/cpuset.h>
+#ifdef CONFIG_MUSHROOM_SCHED54
+#include <linux/sched.h>
+#endif
 
 #if IS_ENABLED(CONFIG_CPU_CAPACITY_FIXUP)
 #include <linux/proc_fs.h>
@@ -318,6 +321,10 @@ init_cpu_capacity_callback(struct notifier_block *nb,
 
 	if (cpumask_empty(cpus_to_visit)) {
 		topology_normalize_cpu_scale();
+#ifdef CONFIG_MUSHROOM_SCHED54
+		/* Match the donor: every policy and normalized capacity is ready. */
+		walt_update_cluster_topology();
+#endif
 		schedule_work(&update_topology_flags_work);
 		free_raw_capacity();
 		pr_debug("cpu_capacity: parsing done\n");

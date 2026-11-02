@@ -36,6 +36,7 @@
 #include "sde_vbif.h"
 #include "sde_plane.h"
 #include "sde_color_processing.h"
+#include "mushroom_kcal.h"
 
 #if defined(CONFIG_DISPLAY_SAMSUNG)
 #include "sde_encoder.h"
@@ -132,6 +133,8 @@ struct sde_plane {
 
 	const struct drm_msm_pcc *pcc_cfg;
 	uint32_t pcc_coeff[9];
+	u32 kcal_generation;
+	bool kcal_active;
 	struct sde_csc_cfg csc_cfg;
 	struct sde_csc_cfg csc_pcc_cfg;
 	struct sde_csc_cfg *csc_usr_ptr;
@@ -1241,7 +1244,7 @@ static inline void _sde_plane_setup_csc_pcc(struct sde_plane *psde)
 
 	psde->csc_pcc_ptr = NULL;
 
-	if (!psde->pcc_cfg)
+	if (!psde->pcc_cfg && !psde->kcal_active)
 		return;
 
 	if (!csc_ptr) {
@@ -3367,7 +3370,8 @@ static inline void _sde_plane_set_csc_pcc(struct sde_plane *psde,
 {
 	const struct drm_msm_pcc *pcc_cfg = sde_cp_crtc_get_pcc_cfg(crtc);
 
-	if (pcc_cfg == psde->pcc_cfg)
+	if (pcc_cfg == psde->pcc_cfg &&
+	    mushroom_kcal_generation() == psde->kcal_generation)
 		return;
 
 	psde->pcc_cfg = pcc_cfg;
@@ -3387,8 +3391,15 @@ static inline void _sde_plane_set_csc_pcc(struct sde_plane *psde,
 		set_coeff(b.r);
 		set_coeff(b.g);
 		set_coeff(b.b);
+	} else {
+		memset(psde->pcc_coeff, 0, sizeof(psde->pcc_coeff));
+		psde->pcc_coeff[0] = PCC_ONE;
+		psde->pcc_coeff[4] = PCC_ONE;
+		psde->pcc_coeff[8] = PCC_ONE;
 	}
 
+	psde->kcal_active = mushroom_kcal_apply(psde->pcc_coeff,
+			&psde->kcal_generation);
 	pstate->dirty |= SDE_PLANE_DIRTY_RECTS;
 }
 

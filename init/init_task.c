@@ -73,6 +73,10 @@ struct task_struct init_task
 	.normal_prio	= MAX_PRIO - 20,
 	.policy		= SCHED_NORMAL,
 	.cpus_allowed	= CPU_MASK_ALL,
+#ifdef CONFIG_MUSHROOM_SCHED54
+	.cpus_ptr = &init_task.cpus_mask,
+	.wts = { .cpus_requested = CPU_MASK_ALL },
+#endif
 	.nr_cpus_allowed= NR_CPUS,
 	.cpus_requested	= CPU_MASK_ALL,
 	.mm		= NULL,

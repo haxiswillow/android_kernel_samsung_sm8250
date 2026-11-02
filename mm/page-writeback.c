@@ -1859,7 +1859,8 @@ pause:
 					  pause,
 					  start_time);
 
-		if (bdi->capabilities & BDI_CAP_SEC_DEBUG && pause == max_pause) {
+		if (IS_ENABLED(CONFIG_MUSHROOM_VERBOSE_DEBUG) &&
+		    (bdi->capabilities & BDI_CAP_SEC_DEBUG) && pause == max_pause) {
 			unsigned long nr_dirty_pages_in_timelist = 0;  /* # of dirty pages in b_dirty_time list */
 			unsigned long nr_dirty_inodes_in_timelist = 0; /* # of dirty inodes in b_dirty_time list */
 			struct inode *inode;

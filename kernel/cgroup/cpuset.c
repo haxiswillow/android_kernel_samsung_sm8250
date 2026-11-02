@@ -25,6 +25,9 @@
 #include <linux/cpu.h>
 #include <linux/cpumask.h>
 #include <linux/cpuset.h>
+#include <linux/mushroom_uclamp.h>
+#include <linux/mushroom_sched_compat.h>
+#include <linux/mushroom_ui.h>
 #include <linux/err.h>
 #include <linux/errno.h>
 #include <linux/file.h>
@@ -78,6 +81,9 @@ struct fmeter {
 
 struct cpuset {
 	struct cgroup_subsys_state css;
+#ifdef CONFIG_UCLAMP_TASK
+	u8 mushroom_uclamp_class;
+#endif
 
 	unsigned long flags;		/* "unsigned long" so bitops work */
 
@@ -135,6 +141,12 @@ struct cpuset {
 
 	/* for custom sched domain */
 	int relax_domain_level;
+#ifdef CONFIG_MUSHROOM_BG_CPUSET
+	bool mushroom_background;
+#endif
+#ifdef CONFIG_MUSHROOM_UI
+	unsigned int mushroom_ui_class;
+#endif
 };
 
 static inline struct cpuset *css_cs(struct cgroup_subsys_state *css)
@@ -147,6 +159,24 @@ static inline struct cpuset *task_cs(struct task_struct *task)
 {
 	return css_cs(task_css(task, cpuset_cgrp_id));
 }
+
+#ifdef CONFIG_MUSHROOM_UI
+/* Class is cached at cgroup online time, never inferred from a task name. */
+unsigned int mushroom_task_ui_class(struct task_struct *p)
+{
+	struct cpuset *cs;
+	unsigned int class = MUSHROOM_UI_NONE;
+
+	if (!p)
+		return class;
+	rcu_read_lock();
+	cs = task_cs(p);
+	if (cs)
+		class = READ_ONCE(cs->mushroom_ui_class);
+	rcu_read_unlock();
+	return class;
+}
+#endif
 
 static inline struct cpuset *parent_cs(struct cpuset *cs)
 {
@@ -874,8 +904,8 @@ static int update_cpus_allowed(struct cpuset *cs, struct task_struct *p,
 {
 	int ret;
 
-	if (cpumask_subset(&p->cpus_requested, cs->cpus_requested)) {
-		ret = set_cpus_allowed_ptr(p, &p->cpus_requested);
+	if (cpumask_subset(&mushroom_task_walt(p, cpus_requested), cs->cpus_requested)) {
+		ret = set_cpus_allowed_ptr(p, &mushroom_task_walt(p, cpus_requested));
 		if (!ret)
 			return ret;
 	}
@@ -1001,6 +1031,21 @@ static int update_cpumask(struct cpuset *cs, struct cpuset *trialcs,
 	if (!cpumask_subset(trialcs->cpus_requested, cpu_present_mask))
 		return -EINVAL;
 
+#ifdef CONFIG_MUSHROOM_BG_CPUSET
+	if (cs->mushroom_background && !is_in_v2_mode() &&
+	    !cpumask_empty(trialcs->cpus_requested)) {
+		int cpu;
+		struct cpuset *parent = parent_cs(cs);
+
+		cpumask_clear(trialcs->cpus_requested);
+		for (cpu = 0; cpu < 4 && cpu < nr_cpu_ids; cpu++)
+			if (cpumask_test_cpu(cpu, parent->cpus_requested) &&
+			    cpu_present(cpu))
+				cpumask_set_cpu(cpu, trialcs->cpus_requested);
+		if (cpumask_empty(trialcs->cpus_requested))
+			return -EINVAL;
+	}
+#endif
 	cpumask_and(trialcs->cpus_allowed, trialcs->cpus_requested, cpu_active_mask);
 
 	/* Nothing to do if the cpus didn't change */
@@ -1611,6 +1656,11 @@ static void cpuset_attach(struct cgroup_taskset *tset)
 	if (!cs->attach_in_progress)
 		wake_up(&cpuset_attach_wq);
 
+#ifdef CONFIG_MUSHROOM_UI
+	if (cs->mushroom_ui_class == MUSHROOM_UI_TOP_APP &&
+	    oldcs->mushroom_ui_class != MUSHROOM_UI_TOP_APP)
+		mushroom_ui_action();
+#endif
 	mutex_unlock(&cpuset_mutex);
 }
 
@@ -2009,19 +2059,71 @@ free_cs:
 	return ERR_PTR(-ENOMEM);
 }
 
+#ifdef CONFIG_UCLAMP_TASK
+/* Native hints follow the existing ROM cpuset, without moving any task. */
+unsigned int mushroom_uclamp_top_app = 20;
+unsigned int mushroom_uclamp_foreground = 10;
+
+unsigned int mushroom_cpuset_util_min(struct task_struct *p)
+{
+	struct cpuset *cs;
+	unsigned int percent = 0;
+
+	rcu_read_lock();
+	cs = task_cs(p);
+	if (cs && cs->mushroom_uclamp_class == 2)
+		percent = READ_ONCE(mushroom_uclamp_top_app);
+	else if (cs && cs->mushroom_uclamp_class == 1)
+		percent = READ_ONCE(mushroom_uclamp_foreground);
+	rcu_read_unlock();
+	return min(percent, 100U) * 1024 / 100;
+}
+#endif
+
 static int cpuset_css_online(struct cgroup_subsys_state *css)
 {
 	struct cpuset *cs = css_cs(css);
 	struct cpuset *parent = parent_cs(cs);
 	struct cpuset *tmp_cs;
 	struct cgroup_subsys_state *pos_css;
+#if defined(CONFIG_MUSHROOM_UI) || defined(CONFIG_MUSHROOM_BG_CPUSET)
+	char mushroom_name[32];
+#endif
 
 	if (!parent)
 		return 0;
 
+#ifdef CONFIG_UCLAMP_TASK
+	cs->mushroom_uclamp_class = parent->mushroom_uclamp_class;
+	if (parent == &top_cpuset) {
+		char name[32] = { 0 };
+
+		cgroup_name(css->cgroup, name, sizeof(name));
+		if (!strcmp(name, "top-app"))
+			cs->mushroom_uclamp_class = 2;
+		else if (!strcmp(name, "foreground"))
+			cs->mushroom_uclamp_class = 1;
+	}
+#endif
+
 	get_online_cpus();
 	mutex_lock(&cpuset_mutex);
 
+#if defined(CONFIG_MUSHROOM_UI) || defined(CONFIG_MUSHROOM_BG_CPUSET)
+	cgroup_name(css->cgroup, mushroom_name, sizeof(mushroom_name));
+#endif
+#ifdef CONFIG_MUSHROOM_BG_CPUSET
+	cs->mushroom_background = parent == &top_cpuset &&
+		(!strcmp(mushroom_name, "background") ||
+		 !strcmp(mushroom_name, "system-background"));
+#endif
+#ifdef CONFIG_MUSHROOM_UI
+	cs->mushroom_ui_class = parent->mushroom_ui_class;
+	if (!strcmp(mushroom_name, "top-app"))
+		cs->mushroom_ui_class = MUSHROOM_UI_TOP_APP;
+	else if (!strcmp(mushroom_name, "foreground"))
+		cs->mushroom_ui_class = MUSHROOM_UI_FOREGROUND;
+#endif
 	set_bit(CS_ONLINE, &cs->flags);
 	if (is_spread_page(parent))
 		set_bit(CS_SPREAD_PAGE, &cs->flags);

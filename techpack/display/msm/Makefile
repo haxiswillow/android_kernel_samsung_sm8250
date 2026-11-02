@@ -35,6 +35,8 @@ msm_drm-$(CONFIG_SEC_DISPLAYPORT_AUX_CONTROL) += dp/secdp_aux_control.o \
 
 msm_drm-$(CONFIG_SEC_DISPLAYPORT_BIGDATA) += dp/displayport_bigdata.o \
 
+msm_drm-$(CONFIG_MUSHROOM_KCAL) += sde/mushroom_kcal.o
+
 msm_drm-$(CONFIG_DRM_MSM_SDE) += sde/sde_crtc.o \
 	sde/sde_encoder.o \
 	sde/sde_encoder_phys_vid.o \

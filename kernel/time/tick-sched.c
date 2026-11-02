@@ -785,7 +785,10 @@ static void tick_nohz_stop_tick(struct tick_sched *ts, int cpu)
 	 */
 	if (!ts->tick_stopped) {
 		calc_load_nohz_start();
+#ifndef CONFIG_MUSHROOM_SCHED54
+		/* 4.19 load history; 5.4 accounts load through PELT/WALT. */
 		cpu_load_update_nohz_start();
+#endif
 		quiet_vmstat();
 
 		ts->last_tick = hrtimer_get_expires(&ts->sched_timer);
@@ -832,7 +835,9 @@ static void tick_nohz_restart_sched_tick(struct tick_sched *ts, ktime_t now)
 {
 	/* Update jiffies first */
 	tick_do_update_jiffies64(now);
+#ifndef CONFIG_MUSHROOM_SCHED54
 	cpu_load_update_nohz_stop();
+#endif
 
 	/*
 	 * Clear the timer idle flag, so we avoid IPIs on remote queueing and

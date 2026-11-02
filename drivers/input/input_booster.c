@@ -499,7 +499,7 @@ void remove_ib_instance(struct t_ib_info *target_ib)
 		list_del_rcu(&(target_ib->list));
 		spin_unlock(&write_ib_lock);
 		synchronize_rcu();
-		pr_info(ITAG" Del Ib Instance's Id : %d", target_ib->uniq_id);
+		pr_debug(ITAG" Del Ib Instance's Id : %d", target_ib->uniq_id);
 		kfree(target_ib);
 	}
 }

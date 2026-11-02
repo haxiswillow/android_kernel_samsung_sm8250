@@ -1916,7 +1916,7 @@ static u8 fts_event_handler_type_b(struct fts_ts_info *info)
 					}
 
 #if !defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
-					input_info(true, &info->client->dev,
+					input_dbg(true, &info->client->dev,
 							"[R] tID:%d loc:%s dd:%d,%d mc:%d tc:%d lx:%d ly:%d mx:%d my:%d p:%d nlvl:%d maxS:%d hid:%d\n",
 							TouchID, location,
 							info->finger[TouchID].x - info->finger[TouchID].p_x,
@@ -1927,7 +1927,7 @@ static u8 fts_event_handler_type_b(struct fts_ts_info *info)
 							info->finger[TouchID].palm_count, info->finger[TouchID].noise_level,
 							info->finger[TouchID].max_strength, info->finger[TouchID].hover_id_num);
 #else
-					input_info(true, &info->client->dev,
+					input_dbg(true, &info->client->dev,
 							"[R] tID:%d loc:%s dd:%d,%d mp:%d,%d mc:%d tc:%d p:%d nlvl:%d maxS:%d hid:%d\n",
 							TouchID, location,
 							info->finger[TouchID].x - info->finger[TouchID].p_x,
@@ -1987,7 +1987,7 @@ static u8 fts_event_handler_type_b(struct fts_ts_info *info)
 					}
 
 #if !defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
-					input_info(true, &info->client->dev,
+					input_dbg(true, &info->client->dev,
 							"[P] tID:%d.%d x:%d y:%d z:%d major:%d minor:%d loc:%s tc:%d type:%d p:%d nlvl:%d maxS:%d hid:%d\n",
 							TouchID, (info->input_dev->mt->trkid - 1) & TRKID_MAX,
 							info->finger[TouchID].x, info->finger[TouchID].y,
@@ -1997,7 +1997,7 @@ static u8 fts_event_handler_type_b(struct fts_ts_info *info)
 							info->finger[TouchID].palm_count, info->finger[TouchID].noise_level,
 							info->finger[TouchID].max_strength, info->finger[TouchID].hover_id_num);
 #else
-					input_info(true, &info->client->dev,
+					input_dbg(true, &info->client->dev,
 							"[P] tID:%d.%d z:%d major:%d minor:%d loc:%s tc:%d type:%d p:%d nlvl:%d maxS:%d hid:%d\n",
 							TouchID, (info->input_dev->mt->trkid - 1) & TRKID_MAX,
 							info->finger[TouchID].z,

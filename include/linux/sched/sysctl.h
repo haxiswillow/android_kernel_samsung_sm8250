@@ -1,3 +1,6 @@
+#ifdef CONFIG_MUSHROOM_SCHED54
+#include <linux/sched54/sysctl.h>
+#else
 /* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _LINUX_SCHED_SYSCTL_H
 #define _LINUX_SCHED_SYSCTL_H
@@ -169,3 +172,5 @@ extern int sched_energy_aware_handler(struct ctl_table *table, int write,
 #endif
 
 #endif /* _LINUX_SCHED_SYSCTL_H */
+
+#endif

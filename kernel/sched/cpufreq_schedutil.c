@@ -170,8 +170,13 @@ static bool sugov_update_next_freq(struct sugov_policy *sg_policy, u64 time,
 	if (sg_policy->next_freq == next_freq)
 		return false;
 
-	if (sugov_up_down_rate_limit(sg_policy, time, next_freq))
+	if (sugov_up_down_rate_limit(sg_policy, time, next_freq)) {
+		/* Don't cache a raw frequency that never became next_freq.
+		 * Restore the Android common/Qualcomm rate-limit invariant.
+		 */
+		sg_policy->cached_raw_freq = 0;
 		return false;
+	}
 
 	sg_policy->next_freq = next_freq;
 	sg_policy->last_freq_update_time = time;
@@ -427,7 +432,12 @@ static unsigned long sugov_get_util(struct sugov_cpu *sg_cpu)
 	sg_cpu->max = max;
 	sg_cpu->bw_dl = cpu_bw_dl(rq);
 
+#ifdef CONFIG_SCHED_TUNE
 	return stune_util(sg_cpu->cpu, 0, &sg_cpu->walt_load);
+#else
+	/* The !STUNE macro discards walt_load: call the real WALT reader. */
+	return cpu_util_freq(sg_cpu->cpu, &sg_cpu->walt_load);
+#endif
 }
 #else
 static unsigned long sugov_get_util(struct sugov_cpu *sg_cpu)
@@ -586,10 +596,10 @@ static inline bool sugov_cpu_is_busy(struct sugov_cpu *sg_cpu) { return false; }
 #endif /* CONFIG_NO_HZ_COMMON */
 
 #define NL_RATIO 75
-#define DEFAULT_HISPEED_LOAD 90
+#define DEFAULT_HISPEED_LOAD 85
 #define DEFAULT_CPU0_RTG_BOOST_FREQ 1000000
-#define DEFAULT_CPU4_RTG_BOOST_FREQ 0
-#define DEFAULT_CPU7_RTG_BOOST_FREQ 0
+#define DEFAULT_CPU4_RTG_BOOST_FREQ 1478400
+#define DEFAULT_CPU7_RTG_BOOST_FREQ 1574400
 static void sugov_walt_adjust(struct sugov_cpu *sg_cpu, unsigned long *util,
 			      unsigned long *max)
 {
@@ -694,6 +704,7 @@ static void sugov_update_single(struct update_util_data *hook, u64 time,
 				sg_cpu->walt_load.rtgb_active, flags);
 
 	sugov_walt_adjust(sg_cpu, &util, &max);
+	util = uclamp_rq_util_with(cpu_rq(sg_cpu->cpu), util, NULL);
 	next_f = get_next_freq(sg_policy, util, max);
 	/*
 	 * Do not reduce the frequency if the CPU has not been idle
@@ -756,14 +767,16 @@ static unsigned int sugov_next_freq_shared(struct sugov_cpu *sg_cpu, u64 time)
 		 */
 		j_util = j_sg_cpu->util;
 		j_max = j_sg_cpu->max;
+		if (!j_max)
+			continue;
 		j_util = sugov_iowait_apply(j_sg_cpu, time, j_util, j_max);
 
+		sugov_walt_adjust(j_sg_cpu, &j_util, &j_max);
+		j_util = uclamp_rq_util_with(cpu_rq(j), j_util, NULL);
 		if (j_util * max >= j_max * util) {
 			util = j_util;
 			max = j_max;
 		}
-
-		sugov_walt_adjust(j_sg_cpu, &util, &max);
 	}
 
 	return get_next_freq(sg_policy, util, max);
@@ -1240,8 +1253,9 @@ static int sugov_init(struct cpufreq_policy *policy)
 		goto stop_kthread;
 	}
 
-	tunables->up_rate_limit_us = cpufreq_policy_transition_delay_us(policy);
-	tunables->down_rate_limit_us = cpufreq_policy_transition_delay_us(policy);
+	/* Respond to bursts quickly; retain frequency across short UI gaps. */
+	tunables->up_rate_limit_us = 500;
+	tunables->down_rate_limit_us = 20000;
 	tunables->hispeed_load = DEFAULT_HISPEED_LOAD;
 	tunables->hispeed_freq = 0;
 
@@ -1258,6 +1272,8 @@ static int sugov_init(struct cpufreq_policy *policy)
 		break;
 	}
 
+	/* Give the existing high-load branch a real target, not a zero floor. */
+	tunables->hispeed_freq = tunables->rtg_boost_freq;
 	policy->governor_data = sg_policy;
 	sg_policy->tunables = tunables;
 

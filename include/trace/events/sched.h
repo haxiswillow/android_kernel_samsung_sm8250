@@ -1,3 +1,7 @@
+/* Mushroom: select the complete scheduler implementation at build time. */
+#ifdef CONFIG_MUSHROOM_SCHED54
+#include <trace/events/sched54.h>
+#else
 /* SPDX-License-Identifier: GPL-2.0 */
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM sched
@@ -1670,3 +1674,5 @@ TRACE_EVENT(sched_isolate,
 
 /* This part must be outside protection */
 #include <trace/define_trace.h>
+
+#endif /* CONFIG_MUSHROOM_SCHED54 */

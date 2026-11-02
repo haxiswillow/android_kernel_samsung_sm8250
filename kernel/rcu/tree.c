@@ -4185,3 +4185,16 @@ void __init rcu_init(void)
 
 #include "tree_exp.h"
 #include "tree_plugin.h"
+
+#ifdef CONFIG_MUSHROOM_SCHED54
+void rcu_nocb_flush_deferred_wakeup(void)
+{
+	struct rcu_state *rsp;
+	unsigned long flags;
+
+	local_irq_save(flags);
+	for_each_rcu_flavor(rsp)
+		do_nocb_deferred_wakeup(this_cpu_ptr(rsp->rda));
+	local_irq_restore(flags);
+}
+#endif

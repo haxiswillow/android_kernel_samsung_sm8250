@@ -1,3 +1,6 @@
+#ifdef CONFIG_MUSHROOM_SCHED54
+#include "../sched54/sched.h"
+#else
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Scheduler internal types and methods:
@@ -3225,3 +3228,5 @@ struct sched_avg_stats {
 	int nr_scaled;
 };
 extern void sched_get_nr_running_avg(struct sched_avg_stats *stats);
+
+#endif

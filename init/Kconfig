@@ -715,6 +715,14 @@ config GENERIC_SCHED_CLOCK
 
 menu "Scheduler features"
 
+config MUSHROOM_SCHED54
+	bool "Mushroom experimental Qualcomm Linux 5.4 scheduler"
+	depends on ARCH_KONA && ARM64 && SMP && SCHED_WALT && UCLAMP_TASK && !SCHED_TUNE
+	default n
+	help
+	  Select the complete Qualcomm 5.4 scheduling core, classes, WALT,
+	  EAS, PELT and schedutil port. Keep disabled for the legacy scheduler.
+
 config UCLAMP_TASK
 	bool "Enable utilization clamping for RT/FAIR tasks"
 	depends on CPU_FREQ_GOV_SCHEDUTIL

@@ -4,6 +4,7 @@
  */
 
 #include <linux/devfreq_cooling.h>
+#include <linux/mushroom_dvfs.h>
 #include <linux/slab.h>
 #include <linux/msm_kgsl.h>
 
@@ -142,7 +143,7 @@ void kgsl_pwrscale_update_stats(struct kgsl_device *device)
 		struct kgsl_power_stats stats;
 
 		device->ftbl->power_stats(device, &stats);
-		if (psc->popp_level) {
+		if (psc->popp_level && !mushroom_gpu_kernel_policy()) {
 			u64 x = stats.busy_time;
 			u64 y = stats.ram_time;
 
@@ -325,7 +326,8 @@ static bool popp_stable(struct kgsl_device *device)
 	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
 	struct kgsl_pwrscale *psc = &device->pwrscale;
 
-	if (!test_bit(POPP_ON, &psc->popp_state))
+	if (mushroom_gpu_kernel_policy() ||
+	    !test_bit(POPP_ON, &psc->popp_state))
 		return false;
 
 	/* If already pushed or running naturally at min don't push further */
@@ -386,7 +388,8 @@ bool kgsl_popp_check(struct kgsl_device *device)
 	struct kgsl_pwrscale *psc = &device->pwrscale;
 	struct kgsl_pwr_event *e;
 
-	if (!test_bit(POPP_ON, &psc->popp_state))
+	if (mushroom_gpu_kernel_policy() ||
+	    !test_bit(POPP_ON, &psc->popp_state))
 		return false;
 	if (!test_bit(POPP_PUSH, &psc->popp_state))
 		return false;
@@ -458,7 +461,8 @@ static int popp_trans2(struct kgsl_device *device, int level)
 	struct kgsl_pwrscale *psc = &device->pwrscale;
 	int old_level = psc->popp_level;
 
-	if (!test_bit(POPP_ON, &psc->popp_state))
+	if (mushroom_gpu_kernel_policy() ||
+	    !test_bit(POPP_ON, &psc->popp_state))
 		return level;
 
 	clear_bit(POPP_PUSH, &psc->popp_state);
@@ -844,7 +848,8 @@ int kgsl_busmon_target(struct device *dev, unsigned long *freq, u32 flags)
 
 int kgsl_busmon_get_cur_freq(struct device *dev, unsigned long *freq)
 {
-	return 0;
+	/* Busmon uses the GPU's Hz table, not a DDR bandwidth table. */
+	return kgsl_devfreq_get_cur_freq(dev, freq);
 }
 
 /*
@@ -957,8 +962,8 @@ int kgsl_pwrscale_init(struct device *dev, const char *governor)
 
 	profile->initial_freq =
 		pwr->pwrlevels[pwr->default_pwrlevel].gpu_freq;
-	/* Let's start with 10 ms and tune in later */
-	profile->polling_ms = 10;
+	/* Keep active DVFS sampling below an 8.33 ms / 120 Hz frame. */
+	profile->polling_ms = 5;
 
 	/* do not include the 'off' level or duplicate freq. levels */
 	for (i = 0; i < (pwr->num_pwrlevels - 1); i++)

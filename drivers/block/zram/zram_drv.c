@@ -54,10 +54,18 @@ static DEFINE_IDR(zram_index_idr);
 static DEFINE_MUTEX(zram_index_mutex);
 
 static int zram_major;
+#if IS_ENABLED(CONFIG_CRYPTO_LZ4)
+static const char *default_compressor = "lz4";
+#else
 static const char *default_compressor = "lzo-rle";
+#endif
 
 /* Module params (documentation at end) */
 static unsigned int num_devices = 1;
+static unsigned int mushroom_legacy_2g_mb;
+module_param_named(mushroom_legacy_2g_mb, mushroom_legacy_2g_mb, uint, 0644);
+MODULE_PARM_DESC(mushroom_legacy_2g_mb,
+	"Opt-in r8q legacy zram0 2GiB request policy: 0=ROM default, 4096=4GiB");
 /*
  * Pages that compress to sizes equals or greater than this are stored
  * uncompressed in memory.
@@ -3193,6 +3201,12 @@ static ssize_t disksize_store(struct device *dev,
 		goto out_unlock;
 	}
 
+	if (mushroom_legacy_2g_mb == 4096 && zram->disk->first_minor == 0 &&
+	    disksize == (2ULL << 30) &&
+	    ((u64)totalram_pages << PAGE_SHIFT) >= (5ULL << 30)) {
+		disksize = 4ULL << 30;
+		pr_info("r8q boot policy: legacy zram0 2GiB request -> 4GiB\n");
+	}
 	disksize = PAGE_ALIGN(disksize);
 	if (!zram_meta_alloc(zram, disksize)) {
 		err = -ENOMEM;

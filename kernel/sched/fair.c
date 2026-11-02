@@ -97,7 +97,7 @@ unsigned int sysctl_sched_cstate_aware = 1;
  *
  * (default SCHED_TUNABLESCALING_LOG = *(1+ilog(ncpus))
  */
-enum sched_tunable_scaling sysctl_sched_tunable_scaling = SCHED_TUNABLESCALING_LOG;
+enum sched_tunable_scaling sysctl_sched_tunable_scaling = SCHED_TUNABLESCALING_NONE;
 
 /*
  * Minimal preemption granularity for CPU-bound tasks:
@@ -127,10 +127,10 @@ unsigned int sysctl_sched_child_runs_first __read_mostly;
  *
  * (default: 1 msec * (1 + ilog(ncpus)), units: nanoseconds)
  */
-unsigned int sysctl_sched_wakeup_granularity		= 1000000UL;
-unsigned int normalized_sysctl_sched_wakeup_granularity	= 1000000UL;
+unsigned int sysctl_sched_wakeup_granularity		= 500000UL;
+unsigned int normalized_sysctl_sched_wakeup_granularity	= 500000UL;
 
-const_debug unsigned int sysctl_sched_migration_cost	= 500000UL;
+const_debug unsigned int sysctl_sched_migration_cost	= 300000UL;
 DEFINE_PER_CPU_READ_MOSTLY(int, sched_load_boost);
 
 #ifdef CONFIG_SMP
@@ -6205,6 +6205,9 @@ schedtune_cpu_margin(unsigned long util, int cpu)
 static inline unsigned long
 boosted_task_util(struct task_struct *task)
 {
+#ifdef CONFIG_UCLAMP_TASK
+	return uclamp_task_util(task);
+#else
 	unsigned long util = task_util_est(task);
 	long margin = schedtune_task_margin(task);
 	unsigned long ret_value;
@@ -6213,6 +6216,7 @@ boosted_task_util(struct task_struct *task)
 	trace_sched_boost_task(task, util, margin);
 
 	return ret_value;
+#endif
 }
 
 static unsigned long cpu_util_without(int cpu, struct task_struct *p);
@@ -6977,8 +6981,10 @@ static void find_best_target(struct sched_domain *sd, cpumask_t *cpus,
 	if (!start_sd)
 		goto out;
 
-	/* fast path for prev_cpu */
-	if (((capacity_orig_of(prev_cpu) == capacity_orig_of(start_cpu)) ||
+	/* Boosted latency-sensitive tasks must first consider higher capacity. */
+	if (!(prefer_idle && boosted && capacity_orig_of(prev_cpu) <
+		cpu_rq(prev_cpu)->rd->max_cpu_capacity.val) &&
+	    ((capacity_orig_of(prev_cpu) == capacity_orig_of(start_cpu)) ||
 		asym_cap_siblings(prev_cpu, start_cpu)) &&
 		!cpu_isolated(prev_cpu) && cpu_online(prev_cpu) &&
 		idle_cpu(prev_cpu)) {
@@ -7417,7 +7423,7 @@ static int wake_cap(struct task_struct *p, int cpu, int prev_cpu)
  * Predicts what cpu_util(@cpu) would return if @p was migrated (and enqueued)
  * to @dst_cpu.
  */
-static unsigned long cpu_util_next(int cpu, struct task_struct *p, int dst_cpu)
+static __maybe_unused unsigned long cpu_util_next(int cpu, struct task_struct *p, int dst_cpu)
 {
 	struct cfs_rq *cfs_rq = &cpu_rq(cpu)->cfs;
 	unsigned long util_est, util = READ_ONCE(cfs_rq->avg.util_avg);
@@ -7533,6 +7539,8 @@ compute_energy(struct task_struct *p, int dst_cpu, struct perf_domain *pd)
 #ifdef CONFIG_SCHED_WALT
 			cpu_util = cpu_util_next_walt(cpu, p, dst_cpu);
 			sum_util += cpu_util;
+			cpu_util = uclamp_rq_util_with(cpu_rq(cpu), cpu_util,
+						       cpu == dst_cpu ? p : NULL);
 #else
 			unsigned int util_cfs;
 			struct task_struct *tsk;
@@ -7589,7 +7597,11 @@ static void select_cpu_candidates(struct sched_domain *sd, cpumask_t *cpus,
 			if (!cpumask_test_cpu(cpu, &p->cpus_allowed))
 				continue;
 
+#ifdef CONFIG_SCHED_WALT
+			util = cpu_util_next_walt(cpu, p, cpu);
+#else
 			util = cpu_util_next(cpu, p, cpu);
+#endif
 			cpu_cap = capacity_of(cpu);
 			spare_cap = cpu_cap - util;
 

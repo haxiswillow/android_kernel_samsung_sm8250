@@ -1,3 +1,7 @@
+/* Mushroom: select the complete scheduler implementation at build time. */
+#ifdef CONFIG_MUSHROOM_SCHED54
+#include <linux/psi_types54.h>
+#else
 #ifndef _LINUX_PSI_TYPES_H
 #define _LINUX_PSI_TYPES_H
 
@@ -173,3 +177,5 @@ struct psi_group { };
 #endif /* CONFIG_PSI */
 
 #endif /* _LINUX_PSI_TYPES_H */
+
+#endif /* CONFIG_MUSHROOM_SCHED54 */

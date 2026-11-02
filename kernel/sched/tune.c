@@ -1,4 +1,5 @@
 #include <linux/cgroup.h>
+#include <linux/mushroom_ui.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/percpu.h>
@@ -533,6 +534,22 @@ int schedtune_cpu_boost(int cpu)
 	if (schedtune_boost_timeout(now, bg->boost_ts))
 		schedtune_cpu_update(cpu, now);
 
+	if (IS_ENABLED(CONFIG_MUSHROOM_UI)) {
+		struct task_struct *p;
+		struct schedtune *st;
+		int hint = 0;
+
+		if (unlikely(!schedtune_initialized))
+			return bg->boost_max;
+
+		rcu_read_lock();
+		p = READ_ONCE(cpu_rq(cpu)->curr);
+		st = p ? task_schedtune(p) : NULL;
+		if (st && st->boost >= 0)
+			hint = mushroom_ui_boost(mushroom_task_ui_class(p));
+		rcu_read_unlock();
+		return max(bg->boost_max, hint);
+	}
 	return bg->boost_max;
 }
 
@@ -548,6 +565,10 @@ int schedtune_task_boost(struct task_struct *p)
 	rcu_read_lock();
 	st = task_schedtune(p);
 	task_boost = st->boost;
+	/* Respect negative user boosts; otherwise apply the scoped UI hint. */
+	if (task_boost >= 0)
+		task_boost = max(task_boost,
+			mushroom_ui_boost(mushroom_task_ui_class(p)));
 	rcu_read_unlock();
 
 	return task_boost;
@@ -565,6 +586,8 @@ int schedtune_prefer_idle(struct task_struct *p)
 	rcu_read_lock();
 	st = task_schedtune(p);
 	prefer_idle = st->prefer_idle;
+	if (st->boost >= 0 && mushroom_ui_boost(mushroom_task_ui_class(p)))
+		prefer_idle = 1;
 	rcu_read_unlock();
 
 	return prefer_idle;

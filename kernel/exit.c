@@ -484,6 +484,7 @@ assign_new_owner:
 		goto retry;
 	}
 	mm->owner = c;
+	lru_gen_migrate_mm(mm);
 	task_unlock(c);
 	put_task_struct(c);
 }
@@ -824,7 +825,9 @@ void __noreturn do_exit(long code)
 	}
 
 	exit_signals(tsk);  /* sets PF_EXITING */
+#ifndef CONFIG_MUSHROOM_SCHED54
 	sched_exit(tsk);
+#endif /* 5.4 calls walt_task_dead() after the final context switch. */
 
 	/* sync mm's RSS info before statistics gathering */
 	if (tsk->mm)

@@ -49,6 +49,7 @@
  */
 
 #include <linux/uaccess.h>
+#include <linux/mushroom_sched_compat.h>
 
 #include <linux/errno.h>
 #include <linux/time.h>
@@ -1719,7 +1720,7 @@ static int sched_low_latency_show(struct seq_file *m, void *v)
 	if (!p)
 		return -ESRCH;
 
-	low_latency = p->low_latency;
+	low_latency = mushroom_task_walt(p, low_latency);
 	seq_printf(m, "%d\n", low_latency);
 
 	put_task_struct(p);
@@ -1742,7 +1743,14 @@ sched_low_latency_write(struct file *file, const char __user *buf,
 	if (err)
 		goto out;
 
+#ifdef CONFIG_MUSHROOM_SCHED54
+	if (low_latency)
+		p->wts.low_latency |= WALT_LOW_LATENCY_PROCFS;
+	else
+		p->wts.low_latency &= ~WALT_LOW_LATENCY_PROCFS;
+#else
 	p->low_latency = low_latency;
+#endif
 out:
 	put_task_struct(p);
 	return err < 0 ? err : count;
@@ -3165,7 +3173,7 @@ static ssize_t proc_sched_task_boost_read(struct file *file,
 
 	if (!task)
 		return -ESRCH;
-	sched_boost = task->boost;
+	sched_boost = mushroom_task_walt(task, boost);
 	put_task_struct(task);
 	len = snprintf(buffer, sizeof(buffer), "%d\n", sched_boost);
 	return simple_read_from_buffer(buf, count, ppos, buffer, len);
@@ -3197,9 +3205,9 @@ static ssize_t proc_sched_task_boost_write(struct file *file,
 		goto out;
 	}
 
-	task->boost = sched_boost;
+	mushroom_task_walt(task, boost) = sched_boost;
 	if (sched_boost == 0)
-		task->boost_period = 0;
+		mushroom_task_walt(task, boost_period) = 0;
 out:
 	put_task_struct(task);
 	return err < 0 ? err : count;
@@ -3215,7 +3223,7 @@ static ssize_t proc_sched_task_boost_period_read(struct file *file,
 
 	if (!task)
 		return -ESRCH;
-	sched_boost_period_ms = div64_ul(task->boost_period, 1000000UL);
+	sched_boost_period_ms = div64_ul(mushroom_task_walt(task, boost_period), 1000000UL);
 	put_task_struct(task);
 	len = snprintf(buffer, sizeof(buffer), "%llu\n", sched_boost_period_ms);
 	return simple_read_from_buffer(buf, count, ppos, buffer, len);
@@ -3243,14 +3251,14 @@ static ssize_t proc_sched_task_boost_period_write(struct file *file,
 	err = kstrtouint(strstrip(buffer), 0, &sched_boost_period);
 	if (err)
 		goto out;
-	if (task->boost == 0 && sched_boost_period) {
+	if (mushroom_task_walt(task, boost) == 0 && sched_boost_period) {
 		/* setting boost period without boost is invalid */
 		err = -EINVAL;
 		goto out;
 	}
 
-	task->boost_period = (u64)sched_boost_period * 1000 * 1000;
-	task->boost_expires = sched_clock() + task->boost_period;
+	mushroom_task_walt(task, boost_period) = (u64)sched_boost_period * 1000 * 1000;
+	mushroom_task_walt(task, boost_expires) = sched_clock() + mushroom_task_walt(task, boost_period);
 out:
 	put_task_struct(task);
 	return err < 0 ? err : count;

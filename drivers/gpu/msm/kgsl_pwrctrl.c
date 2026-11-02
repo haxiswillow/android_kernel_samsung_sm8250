@@ -3,6 +3,8 @@
  * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
+#include <linux/module.h>
+#include <linux/mushroom_dvfs.h>
 #include <linux/msm-bus.h>
 #include <linux/msm-bus-board.h>
 #include <linux/msm_kgsl.h>
@@ -16,6 +18,17 @@
 #include "kgsl_pwrscale.h"
 #include "kgsl_trace.h"
 #include "kgsl_trace_power.h"
+
+static bool mushroom_trace_limits;
+module_param_named(mushroom_trace_limits, mushroom_trace_limits, bool, 0644);
+MODULE_PARM_DESC(mushroom_trace_limits, "Temporarily trace KGSL sysfs power-limit writers");
+
+static void mushroom_trace_power(const char *node, unsigned int value)
+{
+	if (READ_ONCE(mushroom_trace_limits))
+		pr_info_ratelimited("mushroom-dvfs: kgsl.%s request=%u pid=%d comm=%s\n",
+			node, value, task_pid_nr(current), current->comm);
+}
 
 #define KGSL_PWRFLAGS_POWER_ON 0
 #define KGSL_PWRFLAGS_CLK_ON   1
@@ -197,7 +210,8 @@ static unsigned int _adjust_pwrlevel(struct kgsl_pwrctrl *pwr, int level,
 	break;
 	}
 
-	if (popp && (max_pwrlevel < pwr->active_pwrlevel))
+	if (popp && !mushroom_gpu_kernel_policy() &&
+	    (max_pwrlevel < pwr->active_pwrlevel))
 		max_pwrlevel = pwr->active_pwrlevel;
 
 	if (level < max_pwrlevel)
@@ -796,6 +810,7 @@ static ssize_t thermal_pwrlevel_store(struct device *dev,
 	if (level > pwr->num_pwrlevels - 2)
 		level = pwr->num_pwrlevels - 2;
 
+	mushroom_trace_power("thermal_pwrlevel", level);
 	if (kgsl_pwr_limits_set_freq(pwr->sysfs_pwr_limit,
 			pwr->pwrlevels[level].gpu_freq)) {
 		dev_err(device->dev,
@@ -833,6 +848,9 @@ static ssize_t max_pwrlevel_store(struct device *dev,
 	if (ret)
 		return ret;
 
+	if (mushroom_gpu_kernel_policy())
+		return -EBUSY;
+
 	mutex_lock(&device->mutex);
 
 	/* You can't set a maximum power level lower than the minimum */
@@ -840,6 +858,7 @@ static ssize_t max_pwrlevel_store(struct device *dev,
 		level = pwr->min_pwrlevel;
 
 	pwr->max_pwrlevel = level;
+	mushroom_trace_power("max_pwrlevel", level);
 
 	/* Update the current level using the new limit */
 	kgsl_pwrctrl_pwrlevel_change(device, pwr->active_pwrlevel);
@@ -872,6 +891,7 @@ static void kgsl_pwrctrl_min_pwrlevel_set(struct kgsl_device *device,
 		level = pwr->max_pwrlevel;
 
 	pwr->min_pwrlevel = level;
+	mushroom_trace_power("min_pwrlevel", level);
 
 	/* Update the current level using the new limit */
 	kgsl_pwrctrl_pwrlevel_change(device, pwr->active_pwrlevel);
@@ -890,6 +910,9 @@ static ssize_t min_pwrlevel_store(struct device *dev,
 	ret = kgsl_sysfs_store(buf, &level);
 	if (ret)
 		return ret;
+
+	if (mushroom_gpu_kernel_policy())
+		return -EBUSY;
 
 	kgsl_pwrctrl_min_pwrlevel_set(device, level);
 
@@ -988,6 +1011,7 @@ static ssize_t max_gpuclk_store(struct device *dev,
 	if (ret)
 		return ret;
 
+	mushroom_trace_power("max_gpuclk", val);
 	kgsl_pwrctrl_max_clock_set(device, val);
 
 	return count;
@@ -1331,6 +1355,33 @@ static ssize_t bus_split_store(struct device *dev,
 	return count;
 }
 
+static ssize_t mushroom_gpu_status_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct kgsl_device *device = dev_get_drvdata(dev);
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+	struct devfreq *df = device->pwrscale.devfreqptr;
+	ssize_t len;
+
+	if (IS_ERR_OR_NULL(df))
+		df = NULL;
+	mutex_lock(&device->mutex);
+	len = scnprintf(buf, PAGE_SIZE,
+		"state=%u clock_on=%u cached_hz=%lu level=%u default=%u user_max_level=%u user_min_level=%u thermal_max_level=%u thermal_min_level=%u df_user_min=%lu df_user_max=%lu df_scaling_max=%lu popp=%d\n",
+		device->state, test_bit(KGSL_PWRFLAGS_CLK_ON, &pwr->power_flags) != 0,
+		(unsigned long)kgsl_pwrctrl_active_freq(pwr),
+		pwr->active_pwrlevel, pwr->default_pwrlevel,
+		pwr->max_pwrlevel, pwr->min_pwrlevel,
+		pwr->thermal_pwrlevel, pwr->thermal_pwrlevel_floor,
+		df ? READ_ONCE(df->min_freq) : 0UL,
+		df ? READ_ONCE(df->max_freq) : 0UL,
+		df ? READ_ONCE(df->scaling_max_freq) : 0UL,
+		device->pwrscale.popp_level);
+	mutex_unlock(&device->mutex);
+	return len;
+}
+static DEVICE_ATTR_RO(mushroom_gpu_status);
+
 static ssize_t default_pwrlevel_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
@@ -1354,11 +1405,15 @@ static ssize_t default_pwrlevel_store(struct device *dev,
 	if (ret)
 		return ret;
 
+	if (mushroom_gpu_kernel_policy())
+		return -EBUSY;
+
 	if (level > pwr->num_pwrlevels - 2)
 		goto done;
 
 	mutex_lock(&device->mutex);
 	pwr->default_pwrlevel = level;
+	mushroom_trace_power("default_pwrlevel", level);
 	pwrscale->gpu_profile.profile.initial_freq
 			= pwr->pwrlevels[level].gpu_freq;
 
@@ -1452,6 +1507,9 @@ static ssize_t min_clock_mhz_store(struct device *dev,
 	int level, ret;
 	unsigned int freq;
 	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+
+	if (mushroom_gpu_kernel_policy())
+		return -EBUSY;
 
 	ret = kgsl_sysfs_store(buf, &freq);
 	if (ret)
@@ -1560,6 +1618,9 @@ static ssize_t pwrscale_store(struct device *dev,
 	if (ret)
 		return ret;
 
+	if (mushroom_gpu_kernel_policy() && !enable)
+		return -EBUSY;
+
 	mutex_lock(&device->mutex);
 
 	if (enable)
@@ -1582,6 +1643,58 @@ static ssize_t pwrscale_show(struct device *dev,
 }
 
 static DEVICE_ATTR_RO(temp);
+/* These explicit controls cannot be overwritten through legacy HAL nodes.
+ * Values are supported Hz, zero releases that user bound. Thermal wins.
+ */
+static ssize_t mushroom_gpu_bound_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct kgsl_device *device = dev_get_drvdata(dev);
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+	unsigned int level;
+
+	mutex_lock(&device->mutex);
+	level = !strcmp(attr->attr.name, "mushroom_gpu_min_hz") ?
+		pwr->min_pwrlevel : pwr->max_pwrlevel;
+	level = pwr->pwrlevels[level].gpu_freq;
+	mutex_unlock(&device->mutex);
+	return scnprintf(buf, PAGE_SIZE, "%u\n", level);
+}
+
+static ssize_t mushroom_gpu_bound_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct kgsl_device *device = dev_get_drvdata(dev);
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+	bool minimum = !strcmp(attr->attr.name, "mushroom_gpu_min_hz");
+	unsigned int hz;
+	int level, ret;
+
+	ret = kstrtouint(buf, 10, &hz);
+	if (ret)
+		return ret;
+	mutex_lock(&device->mutex);
+	level = hz ? _get_nearest_pwrlevel(pwr, hz) :
+		(minimum ? pwr->num_pwrlevels - 2 : 0);
+	if (level < 0 || (hz && pwr->pwrlevels[level].gpu_freq != hz) ||
+	    (minimum && level < pwr->max_pwrlevel) ||
+	    (!minimum && level > pwr->min_pwrlevel)) {
+		mutex_unlock(&device->mutex);
+		return -EINVAL;
+	}
+	if (minimum)
+		pwr->min_pwrlevel = level;
+	else
+		pwr->max_pwrlevel = level;
+	kgsl_pwrctrl_pwrlevel_change(device, pwr->active_pwrlevel);
+	mutex_unlock(&device->mutex);
+	return count;
+}
+static DEVICE_ATTR(mushroom_gpu_min_hz, 0644,
+	mushroom_gpu_bound_show, mushroom_gpu_bound_store);
+static DEVICE_ATTR(mushroom_gpu_max_hz, 0644,
+	mushroom_gpu_bound_show, mushroom_gpu_bound_store);
+
 static DEVICE_ATTR_RW(gpuclk);
 static DEVICE_ATTR_RW(max_gpuclk);
 static DEVICE_ATTR_RW(idle_timer);
@@ -1628,6 +1741,9 @@ static const struct attribute *pwrctrl_attr_list[] = {
 	&dev_attr_force_no_nap.attr,
 	&dev_attr_bus_split.attr,
 	&dev_attr_default_pwrlevel.attr,
+	&dev_attr_mushroom_gpu_status.attr,
+	&dev_attr_mushroom_gpu_min_hz.attr,
+	&dev_attr_mushroom_gpu_max_hz.attr,
 	&dev_attr_popp.attr,
 	&dev_attr_gpu_model.attr,
 	&dev_attr_gpu_busy_percentage.attr,

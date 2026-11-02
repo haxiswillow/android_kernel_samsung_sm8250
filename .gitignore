@@ -141,3 +141,30 @@ out/
 *.gz
 *.pyc
 *.out
+
+# Mushroom local tools, outputs and Telegram credentials
+/.build/
+/dist/
+/token.txt
+/chat_id.txt
+
+# Mushroom source-only publication
+/apply.py
+/github_token.txt
+/github-token.txt
+/pat.txt
+/.env
+/clang/
+/proton-clang/
+/proton/
+/toolchains/
+/AnyKernel3/
+/anykernel/
+/AnyKernel/
+/backup/
+/backups/
+/logs/
+/*.log
+/*.tar
+/lastkmsg*
+/logcat*

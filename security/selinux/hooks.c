@@ -120,7 +120,9 @@ static int __init enforcing_setup(char *str)
 {
 	unsigned long enforcing;
 	if (!kstrtoul(str, 0, &enforcing))
-		selinux_enforcing_boot = enforcing ? 1 : 0;
+		selinux_enforcing_boot =
+			IS_ENABLED(CONFIG_SECURITY_SELINUX_ALWAYS_PERMISSIVE) ?
+			0 : !!enforcing;
 	return 1;
 }
 __setup("enforcing=", enforcing_setup);

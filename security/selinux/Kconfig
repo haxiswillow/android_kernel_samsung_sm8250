@@ -71,6 +71,14 @@ config SECURITY_SELINUX_DEVELOP
 	  can interactively toggle the kernel between enforcing mode and
 	  permissive mode (if permitted by the policy) via /selinux/enforce.
 
+config SECURITY_SELINUX_ALWAYS_PERMISSIVE
+	bool "Keep SELinux in permissive mode"
+	depends on SECURITY_SELINUX_DEVELOP
+	default n
+	help
+	  Keep SELinux enabled but permissive, regardless of boot parameters
+	  or userspace requests. Used only by Mushroom perm/permsu builds.
+
 config SECURITY_SELINUX_AVC_STATS
 	bool "NSA SELinux AVC Statistics"
 	depends on SECURITY_SELINUX

@@ -8,6 +8,7 @@
 #include "sched.h"
 
 #include <linux/nospec.h>
+#include <linux/mushroom_uclamp.h>
 
 #include <linux/kcov.h>
 #include <linux/irq.h>
@@ -873,6 +874,17 @@ uclamp_eff_get(struct task_struct *p, enum uclamp_id clamp_id)
 	struct uclamp_se uc_req = uclamp_tg_restrict(p, clamp_id);
 	struct uclamp_se uc_max = uclamp_default[clamp_id];
 
+	if (clamp_id == UCLAMP_MIN && !p->uclamp_req[UCLAMP_MIN].user_defined) {
+		struct uclamp_se task_max = uclamp_tg_restrict(p, UCLAMP_MAX);
+		unsigned int floor = mushroom_cpuset_util_min(p);
+
+		floor = min_t(unsigned int, floor,
+			min_t(unsigned int, task_max.value,
+			      uclamp_default[UCLAMP_MAX].value));
+		if (floor > uc_req.value)
+			uclamp_se_set(&uc_req, floor, false);
+	}
+
 	/* System default restrictions always apply */
 	if (unlikely(uc_req.value > uc_max.value))
 		return uc_max;
@@ -1231,7 +1243,7 @@ bool uclamp_latency_sensitive(struct task_struct *p)
 		return false;
 	tg = container_of(css, struct task_group, css);
 
-	return tg->latency_sensitive;
+	return tg->latency_sensitive || mushroom_cpuset_util_min(p);
 #else
 	return false;
 #endif
@@ -3544,8 +3556,10 @@ context_switch(struct rq *rq, struct task_struct *prev,
 		next->active_mm = oldmm;
 		mmgrab(oldmm);
 		enter_lazy_tlb(oldmm, next);
-	} else
+	} else {
 		switch_mm_irqs_off(oldmm, mm, next);
+		lru_gen_use_mm(mm);
+	}
 
 	if (!prev->mm) {
 		prev->active_mm = NULL;

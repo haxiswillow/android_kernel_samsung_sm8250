@@ -1,3 +1,7 @@
+/* Mushroom: select the complete scheduler implementation at build time. */
+#ifdef CONFIG_MUSHROOM_SCHED54
+#include <linux/psi54.h>
+#else
 #ifndef _LINUX_PSI_H
 #define _LINUX_PSI_H
 
@@ -73,3 +77,5 @@ static inline void cgroup_move_task(struct task_struct *p, struct css_set *to)
 #endif /* CONFIG_PSI */
 
 #endif /* _LINUX_PSI_H */
+
+#endif /* CONFIG_MUSHROOM_SCHED54 */

@@ -1,3 +1,7 @@
+/* Mushroom: select the complete scheduler implementation at build time. */
+#ifdef CONFIG_MUSHROOM_SCHED54
+#include <linux/sched54.h>
+#else
 /* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _LINUX_SCHED_H
 #define _LINUX_SCHED_H
@@ -982,6 +986,10 @@ struct task_struct {
 #ifdef CONFIG_MEMCG_KMEM
 	unsigned			memcg_kmem_skip_account:1;
 #endif
+#endif
+#ifdef CONFIG_LRU_GEN
+	/* whether the LRU algorithm may apply to this access */
+	unsigned			in_lru_fault:1;
 #endif
 #ifdef CONFIG_COMPAT_BRK
 	unsigned			brk_randomized:1;
@@ -2246,3 +2254,5 @@ static inline void set_wake_up_idle(bool enabled)
 }
 
 #endif
+
+#endif /* CONFIG_MUSHROOM_SCHED54 */

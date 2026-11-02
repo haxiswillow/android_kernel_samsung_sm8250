@@ -266,4 +266,41 @@ source "drivers/security/samsung/tzic/Kconfig"
 source "drivers/kunit/Kconfig"
 
 source "drivers/spu_verify/Kconfig"
+source "drivers/kernelsu/Kconfig"
+
+config MUSHROOM_BG_CPUSET
+	bool "Mushroom Android background cpuset policy"
+	depends on ARCH_KONA && CPUSETS
+	default n
+	help
+	  On the legacy Android hierarchy, normalize non-empty CPU masks for
+	  the root background and system-background cpusets to CPUs 0-3,
+	  intersected with the parent's requested CPUs and present CPUs.
+	  All validation, hotplug and foreground masks remain unchanged.
+
+config MUSHROOM_UI
+	bool "Mushroom bounded interactive policy"
+	depends on ARCH_KONA && CPUSETS && SCHED_TUNE && QCOM_BUS_SCALING
+	default n
+	help
+	  Moderate boost derived from existing Android cpuset classification,
+	  with a bounded bandwidth vote on app transitions and navigation keys.
+	  No task movement or physical clock overclock is performed.
+
+config MUSHROOM_KCAL
+	bool "Mushroom KCAL RGB and saturation control"
+	depends on DRM && DISPLAY_SAMSUNG && ARCH_KONA
+	default n
+	help
+	  Expose kcal_ctrl.0 RGB, minimum RGB, enable and saturation controls.
+	  Compose calibration with the existing Samsung per-plane PCC matrix.
+	  Neutral defaults preserve ROM color processing and fingerprint layers.
+
+config MUSHROOM_VERBOSE_DEBUG
+	bool "Mushroom verbose hot-path diagnostics"
+	default n
+	help
+	  Enable expensive vendor diagnostic walks in the writeback path.
+	  Leave disabled for normal performance builds.
+
 endmenu

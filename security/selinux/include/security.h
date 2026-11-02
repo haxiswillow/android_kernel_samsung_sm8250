@@ -119,12 +119,14 @@ extern struct selinux_state selinux_state;
 #ifdef CONFIG_SECURITY_SELINUX_DEVELOP
 static inline bool enforcing_enabled(struct selinux_state *state)
 {
-	return state->enforcing;
+	return IS_ENABLED(CONFIG_SECURITY_SELINUX_ALWAYS_PERMISSIVE) ?
+		false : state->enforcing;
 }
 
 static inline void enforcing_set(struct selinux_state *state, bool value)
 {
-	state->enforcing = value;
+	state->enforcing = IS_ENABLED(CONFIG_SECURITY_SELINUX_ALWAYS_PERMISSIVE) ?
+		false : value;
 }
 #else
 static inline bool enforcing_enabled(struct selinux_state *state)

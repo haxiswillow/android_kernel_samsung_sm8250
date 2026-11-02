@@ -158,6 +158,9 @@ static ssize_t sel_write_enforce(struct file *file, const char __user *buf,
 		goto out;
 
 	new_value = !!new_value;
+	/* Android init treats a failed setenforce request as a fatal error. */
+	if (IS_ENABLED(CONFIG_SECURITY_SELINUX_ALWAYS_PERMISSIVE))
+		new_value = 0;
 
 	old_value = enforcing_enabled(state);
 	if (new_value != old_value) {

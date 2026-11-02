@@ -52,6 +52,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/fdtable.h>
+#include <linux/mushroom_sched_compat.h>
 #include <linux/file.h>
 #include <linux/freezer.h>
 #include <linux/fs.h>
@@ -1011,7 +1012,7 @@ static void binder_wakeup_poll_threads_ilocked(struct binder_proc *proc,
 #ifdef CONFIG_SCHED_WALT
 			if (sync && thread->task && thread->task->signal &&
 				(thread->task->signal->oom_score_adj <= 0)) {
-				thread->task->low_latency = true;
+				mushroom_binder_latency(thread->task, true);
 			}
 #endif
 			if (sync)
@@ -1076,7 +1077,7 @@ static void binder_wakeup_thread_ilocked(struct binder_proc *proc,
 #ifdef CONFIG_SCHED_WALT
 		if (sync && thread->task && thread->task->signal &&
 			(thread->task->signal->oom_score_adj <= 0))
-			thread->task->low_latency = true;
+			mushroom_binder_latency(thread->task, true);
 #endif
 		if (sync)
 			wake_up_interruptible_sync(&thread->wait);
@@ -3601,7 +3602,7 @@ retry_lowmem:
 #ifdef CONFIG_SCHED_WALT
 		if (target_thread->task && target_thread->task->signal &&
 			(target_thread->task->signal->oom_score_adj <= 0)) {
-			target_thread->task->low_latency = true;
+			mushroom_binder_latency(target_thread->task, true);
 		}
 #endif
 		wake_up_interruptible_sync(&target_thread->wait);
@@ -4584,8 +4585,8 @@ retry:
 
 		trace_binder_transaction_received(t);
 #ifdef CONFIG_SCHED_WALT
-		if (current->low_latency)
-			current->low_latency = false;
+		if (mushroom_task_walt(current, low_latency))
+			mushroom_binder_latency(current, false);
 #endif
 		binder_stat_br(proc, thread, cmd);
 		binder_debug(BINDER_DEBUG_TRANSACTION,

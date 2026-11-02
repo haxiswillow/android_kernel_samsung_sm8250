@@ -1,0 +1,6 @@
+id=mushroom_policy_v3
+name=Mushroom scoped UI policy
+version=v6
+versionCode=600
+author=Nihil
+description=UCLAMP 20/10, kernel-owned GPU/DDR; Boot-once scoped UI and VM settings with a native CPU-DDR vote ceiling request for Mushroom batch 5. No resident loop; thermal and OPP constraints preserved.

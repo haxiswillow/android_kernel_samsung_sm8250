@@ -236,3 +236,6 @@ obj-$(CONFIG_GPS_BCM4753)	+= gps/
 
 # SPU signature verify
 obj-$(CONFIG_SPU_VERIFY) += spu_verify/
+
+# KernelSU is opt-in through the Mushroom build variants.
+obj-$(CONFIG_KSU) += kernelsu/

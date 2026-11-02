@@ -214,6 +214,14 @@ static inline int list_empty(const struct list_head *head)
 	return READ_ONCE(head->next) == head;
 }
 
+/* Paired with the acquire load in list_empty_careful(). */
+static inline void list_del_init_careful(struct list_head *entry)
+{
+	__list_del_entry(entry);
+	WRITE_ONCE(entry->prev, entry);
+	smp_store_release(&entry->next, entry);
+}
+
 /**
  * list_empty_careful - tests whether a list is empty and not being modified
  * @head: the list to test
@@ -229,8 +237,8 @@ static inline int list_empty(const struct list_head *head)
  */
 static inline int list_empty_careful(const struct list_head *head)
 {
-	struct list_head *next = head->next;
-	return (next == head) && (next == head->prev);
+	struct list_head *next = smp_load_acquire(&head->next);
+	return (next == head) && (next == READ_ONCE(head->prev));
 }
 
 /**

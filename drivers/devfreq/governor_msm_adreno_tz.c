@@ -17,19 +17,25 @@
 #include <soc/qcom/qtee_shmbridge.h>
 #include <linux/of_platform.h>
 #include "governor.h"
+#include "mushroom_gpu_policy.h"
+#include <linux/mushroom_dvfs.h>
+
+static bool mushroom_gpu_guard = true;
+module_param_named(mushroom_gpu_guard, mushroom_gpu_guard, bool, 0644);
+MODULE_PARM_DESC(mushroom_gpu_guard, "Bounded saturation guard; KGSL thermal/user limits still apply");
 
 static DEFINE_SPINLOCK(tz_lock);
 static DEFINE_SPINLOCK(sample_lock);
 static DEFINE_SPINLOCK(suspend_lock);
 /*
- * FLOOR is 5msec to capture up to 3 re-draws
- * per frame for 60fps content.
+ * A 2ms floor samples short render bursts within a 120Hz frame.
+ * MIN_BUSY still filters idle/light samples before the secure governor call.
  */
-#define FLOOR		        5000
+#define FLOOR		        2000
 /*
- * MIN_BUSY is 1 msec for the sample to be sent
+ * MIN_BUSY is 0.5 msec for the sample to be sent
  */
-#define MIN_BUSY		1000
+#define MIN_BUSY		500
 #define MAX_TZ_VERSION		0
 
 /*
@@ -367,7 +373,7 @@ static int tz_get_target_freq(struct devfreq *devfreq, unsigned long *freq)
 	int result = 0;
 	struct devfreq_msm_adreno_tz_data *priv = devfreq->data;
 	struct devfreq_dev_status *stats = &devfreq->last_status;
-	int val, level = 0;
+	int val = 0, level = 0;
 	unsigned int scm_data[4];
 	int context_count = 0;
 
@@ -395,7 +401,8 @@ static int tz_get_target_freq(struct devfreq *devfreq, unsigned long *freq)
 	 */
 	if ((stats->total_time == 0) ||
 		(priv->bin.total_time < FLOOR) ||
-		(unsigned int) priv->bin.busy_time < MIN_BUSY) {
+		(!mushroom_gpu_kernel_policy() &&
+		 (unsigned int) priv->bin.busy_time < MIN_BUSY)) {
 		return 0;
 	}
 
@@ -404,6 +411,18 @@ static int tz_get_target_freq(struct devfreq *devfreq, unsigned long *freq)
 		pr_err(TAG "bad freq %ld\n", stats->current_frequency);
 		return level;
 	}
+
+	if (mushroom_gpu_kernel_policy()) {
+		level = mushroom_gpu_demand(devfreq->profile->freq_table,
+			devfreq->profile->max_state, level,
+			priv->bin.total_time, priv->bin.busy_time,
+			&priv->mushroom_down_us);
+		priv->bin.total_time = 0;
+		priv->bin.busy_time = 0;
+		*freq = devfreq->profile->freq_table[level];
+		return 0;
+	}
+	priv->mushroom_down_us = 0;
 
 	/*
 	 * If there is an extended block of busy processing,
@@ -418,21 +437,29 @@ static int tz_get_target_freq(struct devfreq *devfreq, unsigned long *freq)
 		scm_data[1] = priv->bin.total_time;
 		scm_data[2] = priv->bin.busy_time;
 		scm_data[3] = context_count;
-		__secure_tz_update_entry3(scm_data, sizeof(scm_data),
+		result = __secure_tz_update_entry3(scm_data, sizeof(scm_data),
 					&val, sizeof(val), priv);
+		if (result) {
+			val = 0;
+			pr_warn_ratelimited(TAG "DCVS update failed: %d; keeping a valid target\n", result);
+		}
 	}
-	priv->bin.total_time = 0;
-	priv->bin.busy_time = 0;
 
 	/*
 	 * If the decision is to move to a different level, make sure the GPU
 	 * frequency changes.
 	 */
-	if (val) {
+	/* Bound an untrusted firmware delta before adding it to the index. */
+	val = clamp(val, -level,
+		(int)devfreq->profile->max_state - 1 - level);
+	if (READ_ONCE(mushroom_gpu_guard))
+		level = mushroom_gpu_target(devfreq->profile->freq_table,
+			devfreq->profile->max_state, level, level + val,
+			priv->bin.total_time, priv->bin.busy_time);
+	else
 		level += val;
-		level = max(level, 0);
-		level = min_t(int, level, devfreq->profile->max_state - 1);
-	}
+	priv->bin.total_time = 0;
+	priv->bin.busy_time = 0;
 
 	*freq = devfreq->profile->freq_table[level];
 	return 0;
@@ -552,6 +579,7 @@ static int tz_suspend(struct devfreq *devfreq)
 
 	priv->bin.total_time = 0;
 	priv->bin.busy_time = 0;
+	priv->mushroom_down_us = 0;
 	return 0;
 }
 
