@@ -3444,3 +3444,21 @@ static inline void walt_irq_work_queue(struct irq_work *work)
 	irq_work_queue(work);
 }
 #endif
+
+/* Scoped display hints; the legacy scheduler remains unchanged. */
+#if defined(CONFIG_SCHED_WALT) && defined(CONFIG_UCLAMP_TASK)
+extern bool mushroom_qs_active(void);
+extern bool mushroom_qs_note_task(struct task_struct *p);
+extern bool mushroom_qs_keep_cluster(int first_cpu);
+extern int mushroom_qs_pick_cpu(struct task_struct *p,
+			       const struct cpumask *eligible, bool idle_only);
+#else
+static inline bool mushroom_qs_active(void) { return false; }
+static inline bool mushroom_qs_note_task(struct task_struct *p) { return false; }
+static inline bool mushroom_qs_keep_cluster(int first_cpu) { return false; }
+static inline int mushroom_qs_pick_cpu(struct task_struct *p,
+				     const struct cpumask *eligible, bool idle_only)
+{
+	return -1;
+}
+#endif

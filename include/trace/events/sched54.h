@@ -11,6 +11,10 @@
 #include <linux/binfmts.h>
 #include <linux/sched/idle.h>
 
+/* These pointers also appear when tracing is included outside scheduler internals. */
+struct rq;
+struct root_domain;
+
 /*
  * Tracepoint for calling kthread_stop, performed to end a kthread:
  */

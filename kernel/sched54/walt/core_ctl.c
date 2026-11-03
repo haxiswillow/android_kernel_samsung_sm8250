@@ -17,6 +17,8 @@
 
 #include <trace/events/sched.h>
 #include "qc_vas.h"
+#include <linux/mushroom_qs.h>
+#include <linux/workqueue.h>
 
 #define MAX_NR_HISTORY_COUNT	2
 struct cluster_data {
@@ -776,6 +778,9 @@ static unsigned int apply_task_need(const struct cluster_data *cluster,
 static unsigned int apply_limits(const struct cluster_data *cluster,
 				 unsigned int need_cpus)
 {
+	/* A short display-work window keeps one Big/Prime available. */
+	if (mushroom_qs_keep_cluster(cluster->first_cpu))
+		need_cpus = max(need_cpus, 1U);
 	return min(max(cluster->min_cpus, need_cpus), cluster->max_cpus);
 }
 
@@ -881,6 +886,28 @@ static void apply_need(struct cluster_data *cluster)
 	if (eval_need(cluster))
 		wake_up_core_ctl_thread(cluster);
 }
+
+
+#ifdef MUSHROOM_QS_CPUSET
+/* Re-evaluate native core_ctl promptly on a cold display-work wakeup. */
+static void mushroom_qs_core_workfn(struct work_struct *work)
+{
+	struct cluster_data *cluster;
+	unsigned int index = 0;
+
+	if (!READ_ONCE(initialized))
+		return;
+	for_each_cluster(cluster, index)
+		apply_need(cluster);
+}
+static DECLARE_WORK(mushroom_qs_core_work, mushroom_qs_core_workfn);
+
+void mushroom_qs_core_ctl_kick(void)
+{
+	if (READ_ONCE(initialized) && READ_ONCE(system_wq))
+		schedule_work(&mushroom_qs_core_work);
+}
+#endif
 
 /* ========================= core count enforcement ==================== */
 

@@ -30,6 +30,9 @@
 #include <linux/of.h>
 #include "governor.h"
 #include <linux/mushroom_dvfs.h>
+#include <linux/mushroom_interaction.h>
+#include <linux/spinlock.h>
+#include <linux/jiffies.h>
 
 /* Own only userspace performance limits. OPP/thermal scaling limits win. */
 static bool mushroom_gpu_native = true;
@@ -109,6 +112,89 @@ static LIST_HEAD(devfreq_governor_list);
 /* The list of all device-devfreq */
 static LIST_HEAD(devfreq_list);
 static DEFINE_MUTEX(devfreq_list_lock);
+
+#if defined(CONFIG_MUSHROOM_SCHED54) && defined(CONFIG_PM_DEVFREQ)
+static DEFINE_SPINLOCK(mushroom_ddr_lock);
+static unsigned long mushroom_ddr_until;
+static bool mushroom_ddr_applied;
+static void mushroom_ddr_workfn(struct work_struct *work);
+static DECLARE_DELAYED_WORK(mushroom_ddr_work, mushroom_ddr_workfn);
+
+static bool mushroom_ddr_active(struct devfreq *df)
+{
+	unsigned long until = READ_ONCE(mushroom_ddr_until);
+	return !READ_ONCE(df->dev_suspended) && !READ_ONCE(df->stop_polling) &&
+	       until && time_before(jiffies, until) &&
+	       strstr(dev_name(df->dev.parent), "cpu-llcc-ddr-bw");
+}
+
+/* Called only from the existing CPU interaction path. */
+void mushroom_ddr_boost_kick(unsigned int duration_ms)
+{
+	unsigned long flags, now, until;
+	bool was_active;
+	if (!READ_ONCE(system_highpri_wq) || !duration_ms)
+		return;
+	spin_lock_irqsave(&mushroom_ddr_lock, flags);
+	now = jiffies;
+	until = now + msecs_to_jiffies(min(duration_ms, 1000U));
+	was_active = mushroom_ddr_until && time_before(now, mushroom_ddr_until);
+	if (!was_active || time_after(until, mushroom_ddr_until))
+		WRITE_ONCE(mushroom_ddr_until, until);
+	if (!was_active)
+		mod_delayed_work(system_highpri_wq, &mushroom_ddr_work, 0);
+	spin_unlock_irqrestore(&mushroom_ddr_lock, flags);
+}
+
+static void mushroom_ddr_workfn(struct work_struct *work)
+{
+	struct devfreq *df;
+	unsigned long flags, until, delay, now;
+	bool active, active_now;
+	for (;;) {
+		until = READ_ONCE(mushroom_ddr_until);
+		active = until && time_before(jiffies, until);
+		if (active != mushroom_ddr_applied) {
+			/* Match the core's list -> event -> device lock ordering and lifetime. */
+			mutex_lock(&devfreq_list_lock);
+			list_for_each_entry (df, &devfreq_list, node) {
+				if (!strstr(dev_name(df->dev.parent),
+					    "cpu-llcc-ddr-bw"))
+					continue;
+				mutex_lock(&df->event_lock);
+				mutex_lock(&df->lock);
+				if (!df->dev_suspended && !df->stop_polling &&
+				    df->governor)
+					update_devfreq(df);
+				mutex_unlock(&df->lock);
+				mutex_unlock(&df->event_lock);
+			}
+			mutex_unlock(&devfreq_list_lock);
+			mushroom_ddr_applied = active;
+		}
+		spin_lock_irqsave(&mushroom_ddr_lock, flags);
+		until = mushroom_ddr_until;
+		now = jiffies;
+		active_now = until && time_before(now, until);
+		if (active_now != active) {
+			spin_unlock_irqrestore(&mushroom_ddr_lock, flags);
+			continue;
+		}
+		if (active_now) {
+			delay = max_t(unsigned long, 1, until - now);
+			mod_delayed_work(system_highpri_wq, &mushroom_ddr_work,
+					 delay);
+		}
+		spin_unlock_irqrestore(&mushroom_ddr_lock, flags);
+		return;
+	}
+}
+#else
+static bool mushroom_ddr_active(struct devfreq *df)
+{
+	return false;
+}
+#endif
 
 /**
  * find_device_devfreq() - find devfreq struct using device pointer
@@ -400,6 +486,14 @@ int update_devfreq(struct devfreq *devfreq)
 	 */
 	max_freq = MIN(devfreq->scaling_max_freq, devfreq->max_freq);
 	min_freq = MAX(devfreq->scaling_min_freq, devfreq->min_freq);
+
+	/* A temporary request for this device's effective maximum, not a PLL OC.
+	 * OPP/scaling/thermal bounds and the normal target callback remain in charge.
+	 */
+	if (mushroom_ddr_active(devfreq)) {
+		freq = max_freq;
+		flags |= DEVFREQ_FLAG_LEAST_UPPER_BOUND;
+	}
 
 	if (freq < min_freq) {
 		freq = min_freq;

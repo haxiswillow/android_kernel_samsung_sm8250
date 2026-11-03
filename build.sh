@@ -10,9 +10,9 @@ Mushroom kernel builder - Galaxy S20 FE Snapdragon / AOSP Android 13
 
 Usage: bash build.sh <variant>
 
-  su       SELinux enforcing, with KernelSU v0.9.5
+  su       SELinux enforcing, with BakaSU / ReSukiSU v4.2.0-rc3
   stock    SELinux enforcing, without KernelSU
-  permsu   SELinux permissive, with KernelSU v0.9.5
+  permsu   SELinux permissive, with BakaSU / ReSukiSU v4.2.0-rc3
   perm     SELinux permissive, without KernelSU
 
 No arguments, -h and --help display this help without building.
@@ -30,6 +30,7 @@ Optional environment variables:
   SCHED_CORE=legacy       Use the legacy scheduler (default: 5.4 port)
   CLANG_DIR=/path/clang   Use an existing Clang/LLVM toolchain
   TELEGRAM=0              Disable Telegram upload (default: 1)
+  CONFIG_PROFILE=none     Skip the published per-variant configuration profile
   CONFIG_ONLY=1           Generate and validate this variant's .config only
   CLEAN=1                 Clean this variant's output before building
   SOURCE_DATE_EPOCH=...    Fixed epoch for build ID and build timestamp
@@ -161,11 +162,26 @@ if [[ ${CLEAN:-0} == 1 ]]; then make "${MAKE_ARGS[@]}" clean; fi
 info "Configuring $VARIANT ($KERNEL_RELEASE)"
 make "${MAKE_ARGS[@]}" vendor/lineage_r8q_defconfig
 bash scripts/kconfig/merge_config.sh -m -O "$OUT" "$OUT/.config" mushroom/release.config mushroom/performance.config
+# Replay the last published effective configuration for this variant.
+# An explicit profile or "none" can be selected without changing source.
+PROFILE=${CONFIG_PROFILE:-"$ROOT/mushroom/configs/$VARIANT.config"}
+if [[ $PROFILE != none ]]; then
+    if [[ -f $PROFILE ]]; then
+        info "Applying validated configuration: $PROFILE"
+        bash scripts/kconfig/merge_config.sh -m -O "$OUT" "$OUT/.config" "$PROFILE"
+    elif [[ -n ${CONFIG_PROFILE:-} ]]; then
+        die "CONFIG_PROFILE does not exist: $PROFILE"
+    fi
+fi
 scripts/config --file "$OUT/.config" --set-str LOCALVERSION ":Mushroom/$HEX_DATE" \
     -e SECURITY_SELINUX -d SECURITY_SELINUX_BOOTPARAM -d SECURITY_SELINUX_DISABLE
 if [[ $WITH_KSU == 1 ]]; then
     scripts/config --file "$OUT/.config" -e KSU -e KPROBES -e KPROBE_EVENTS \
-        -e OVERLAY_FS -e KALLSYMS -d KSU_DEBUG
+        -e OVERLAY_FS -e KALLSYMS -e KALLSYMS_ALL -d KSU_DEBUG \
+        -e KSU_MANUAL_HOOK -d KSU_TRACEPOINT_HOOK -d KSU_SUSFS \
+        -e KSU_MULTI_MANAGER_SUPPORT -e KSU_MANUAL_HOOK_AUTO_SETUID_HOOK \
+        -e KSU_MANUAL_HOOK_AUTO_INITRC_HOOK -e KSU_MANUAL_HOOK_AUTO_INPUT_HOOK \
+        -e SECCOMP -e SECCOMP_FILTER
 else
     scripts/config --file "$OUT/.config" -d KSU -d KPROBES -d KPROBE_EVENTS
 fi
@@ -178,6 +194,10 @@ else
 fi
 if [[ ${MGLRU:-1} == 0 ]]; then
     scripts/config --file "$OUT/.config" -d LRU_GEN_ENABLED
+fi
+if [[ $SCHED_POLICY == stune ]]; then
+    scripts/config --file "$OUT/.config" -e SCHED_TUNE -d UCLAMP_TASK \
+        -d UCLAMP_TASK_GROUP -e MUSHROOM_UI
 fi
 if [[ $SCHED_POLICY == uclamp ]]; then
     # Keep cpusets. UCLAMP replaces only the schedtune controller.
@@ -240,6 +260,10 @@ else
 fi
 if [[ $WITH_KSU == 1 ]]; then
     assert_config KSU y; assert_config KPROBES y; assert_config KPROBE_EVENTS y
+    assert_config KSU_MANUAL_HOOK y
+    assert_config KSU_MULTI_MANAGER_SUPPORT y
+    assert_config KALLSYMS_ALL y
+    assert_config SECCOMP y; assert_config SECCOMP_FILTER y
 else
     assert_config KSU n
 fi
@@ -310,7 +334,7 @@ cp "$OUT/.config" "$DIST/$STEM.config"
 {
     printf 'release=%s\nvariant=%s\nselinux=%s\nkernelsu=%s\n' \
         "$KERNEL_RELEASE" "$VARIANT" "$SELINUX" "$WITH_KSU"
-    printf 'kernelsu_version=0.9.5 (11872; enabled only for su/permsu)\n'
+    printf 'kernelsu_version=BakaSU-v4.2.0-rc3-d7260ca1 (35229; su/permsu only)\n'
     printf 'scheduler_core=%s\nscheduler_policy=%s\nmglru_default=%s\n' \
         "$SCHED_CORE" "$SCHED_POLICY" "${MGLRU:-1}"
     printf 'compiler=%s\nanykernel_commit=%s\n' "$CLANG_VERSION" "$AK3_COMMIT"

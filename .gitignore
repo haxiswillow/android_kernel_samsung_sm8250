@@ -168,3 +168,10 @@ out/
 /*.tar
 /lastkmsg*
 /logcat*
+
+# Local publication and diagnostic helpers
+/apply*.py
+/Mushroom-Kernel-Audit*
+/*.atrace
+/*.atrace-*
+/__pycache__/

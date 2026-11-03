@@ -1550,6 +1550,7 @@ select_task_rq_rt(struct task_struct *p, int cpu, int sd_flag, int flags)
 	struct rq *rq;
 	bool may_not_preempt;
 	bool test;
+	bool qs = false;
 	int target_cpu = -1;
 
 	trace_android_rvh_select_task_rq_rt(p, cpu, sd_flag,
@@ -1560,6 +1561,9 @@ select_task_rq_rt(struct task_struct *p, int cpu, int sd_flag, int flags)
 	/* For anything but wake ups, just return the task_cpu */
 	if (sd_flag != SD_BALANCE_WAKE && sd_flag != SD_BALANCE_FORK)
 		goto out;
+
+	if (sd_flag == SD_BALANCE_WAKE)
+		qs = mushroom_qs_note_task(p);
 
 	rq = cpu_rq(cpu);
 
@@ -1607,7 +1611,7 @@ select_task_rq_rt(struct task_struct *p, int cpu, int sd_flag, int flags)
 	       unlikely(rt_task(curr)) &&
 	       (curr->nr_cpus_allowed < 2 || curr->prio <= p->prio);
 
-	if (sched_energy_enabled() || may_not_preempt ||
+	if (qs || sched_energy_enabled() || may_not_preempt ||
 	    test || !rt_task_fits_capacity(p, cpu)) {
 		int target = find_lowest_rq(p);
 
@@ -2047,6 +2051,10 @@ static int find_lowest_rq(struct task_struct *task)
 
 	if (!ret)
 		return -1; /* No targets found */
+
+	cpu = mushroom_qs_pick_cpu(task, lowest_mask, false);
+	if (cpu >= 0)
+		return cpu;
 
 	if (sched_energy_enabled())
 		cpu = rt_energy_aware_wake_cpu(task);

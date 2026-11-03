@@ -55,6 +55,15 @@
 #include <linux/regulator/consumer.h>
 #endif /* CONFIG_SEC_PM */
 
+/* Mushroom QS v11: bound Big/Prime idle latency only during display work. */
+#if defined(CONFIG_MUSHROOM_SCHED54) && defined(CONFIG_SCHED_WALT) && defined(CONFIG_UCLAMP_TASK)
+extern bool mushroom_qs_active(void);
+static unsigned int mushroom_qs_idle_latency_us = 100;
+module_param_named(qs_idle_latency_us, mushroom_qs_idle_latency_us, uint, 0644);
+MODULE_PARM_DESC(qs_idle_latency_us,
+	"QS Big/Prime idle exit latency budget in us (0 disables)");
+#endif
+
 #define SCLK_HZ (32768)
 #define PSCI_POWER_STATE(reset) (reset << 30)
 #define PSCI_AFFINITY_LEVEL(lvl) ((lvl & 0x3) << 24)
@@ -663,6 +672,17 @@ static int cpu_power_select(struct cpuidle_device *dev,
 	uint32_t next_wakeup_us = (uint32_t)sleep_us;
 	uint32_t min_residency, max_residency;
 	struct power_params *pwr_params;
+
+#if defined(CONFIG_MUSHROOM_SCHED54) && defined(CONFIG_SCHED_WALT) && defined(CONFIG_UCLAMP_TASK)
+	/* SM8250: CPUs 4-6 are Big and CPU 7 is Prime. */
+	if (dev->cpu >= 4 && dev->cpu <= 7) {
+		unsigned int limit = READ_ONCE(mushroom_qs_idle_latency_us);
+
+		/* Preserve a stricter native QoS request and the idle policy. */
+		if (limit && mushroom_qs_active())
+			latency_us = min(latency_us, limit);
+	}
+#endif
 
 	if (lpm_disallowed(sleep_us, dev->cpu, cpu))
 		goto done_select;

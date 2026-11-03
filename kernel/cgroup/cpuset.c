@@ -28,6 +28,10 @@
 #include <linux/mushroom_uclamp.h>
 #include <linux/mushroom_sched_compat.h>
 #include <linux/mushroom_ui.h>
+#include <linux/mushroom_qs.h>
+#include <linux/mushroom_interaction.h>
+#include <linux/workqueue.h>
+#include <linux/sched/signal.h>
 #include <linux/err.h>
 #include <linux/errno.h>
 #include <linux/file.h>
@@ -143,6 +147,7 @@ struct cpuset {
 	int relax_domain_level;
 #ifdef CONFIG_MUSHROOM_BG_CPUSET
 	bool mushroom_background;
+	bool mushroom_display_background;
 #endif
 #ifdef CONFIG_MUSHROOM_UI
 	unsigned int mushroom_ui_class;
@@ -899,10 +904,41 @@ void rebuild_sched_domains(void)
 	put_online_cpus();
 }
 
+#ifdef MUSHROOM_QS_CPUSET
+/*
+ * Legacy Android system-background is a shared service group, not a display
+ * latency policy. Only the recognised AID_SYSTEM display threads may use its
+ * parent's CPU allowance. The group's masks and every other task stay intact.
+ * The caller holds cpuset_mutex or callback_lock.
+ */
+static bool mushroom_qs_cpuset_mask(struct cpuset *cs, struct task_struct *p,
+				    struct cpumask *mask)
+{
+	if (!cs || !cs->mushroom_display_background || is_in_v2_mode() ||
+	    parent_cs(cs) != &top_cpuset || !mushroom_qs_cpuset_enabled() ||
+	    !mushroom_qs_cpuset_task(p))
+		return false;
+
+	cpumask_and(mask, parent_cs(cs)->effective_cpus, cpu_active_mask);
+	return !cpumask_empty(mask);
+}
+#endif
+
 static int update_cpus_allowed(struct cpuset *cs, struct task_struct *p,
 			       const struct cpumask *new_mask)
 {
 	int ret;
+#ifdef MUSHROOM_QS_CPUSET
+	cpumask_t display_mask;
+	const struct cpumask *requested = &mushroom_task_walt(p, cpus_requested);
+
+	if (mushroom_qs_cpuset_mask(cs, p, &display_mask)) {
+		if (!cpumask_empty(requested))
+			cpumask_and(&display_mask, &display_mask, requested);
+		if (!cpumask_empty(&display_mask))
+			return set_cpus_allowed_ptr(p, &display_mask);
+	}
+#endif
 
 	if (cpumask_subset(&mushroom_task_walt(p, cpus_requested), cs->cpus_requested)) {
 		ret = set_cpus_allowed_ptr(p, &mushroom_task_walt(p, cpus_requested));
@@ -912,6 +948,142 @@ static int update_cpus_allowed(struct cpuset *cs, struct task_struct *p,
 
 	return set_cpus_allowed_ptr(p, new_mask);
 }
+
+#ifdef MUSHROOM_QS_CPUSET
+#define QS_AFFINITY_SLOTS 8
+static DEFINE_SPINLOCK(qs_affinity_lock);
+static struct task_struct *qs_pending[QS_AFFINITY_SLOTS];
+static bool qs_refresh_pending;
+
+static void qs_apply_affinity(struct task_struct *p)
+{
+	struct cpuset *cs = NULL;
+	cpumask_var_t mask;
+
+	if (READ_ONCE(p->exit_state) || (p->flags & PF_NO_SETAFFINITY) ||
+	    !alloc_cpumask_var(&mask, GFP_KERNEL))
+		return;
+
+	/* Pin online CPUs before cpuset_mutex; never run under an rq lock. */
+	get_online_cpus();
+	mutex_lock(&cpuset_mutex);
+	rcu_read_lock();
+	cs = task_cs(p);
+	if (!cs || !cs->mushroom_display_background ||
+	    !css_tryget_online(&cs->css))
+		cs = NULL;
+	rcu_read_unlock();
+	if (cs) {
+		guarantee_online_cpus(cs, mask);
+		update_cpus_allowed(cs, p, mask);
+		css_put(&cs->css);
+	}
+	mutex_unlock(&cpuset_mutex);
+	put_online_cpus();
+	free_cpumask_var(mask);
+}
+
+static struct task_struct *qs_take_pending(void)
+{
+	struct task_struct *p = NULL;
+	unsigned long flags;
+	int i;
+
+	spin_lock_irqsave(&qs_affinity_lock, flags);
+	for (i = 0; i < QS_AFFINITY_SLOTS; i++) {
+		if (!qs_pending[i])
+			continue;
+		p = qs_pending[i];
+		qs_pending[i] = NULL;
+		break;
+	}
+	spin_unlock_irqrestore(&qs_affinity_lock, flags);
+	return p;
+}
+
+static void qs_affinity_workfn(struct work_struct *work)
+{
+	struct task_struct *p, *g, *snapshot[QS_AFFINITY_SLOTS];
+	unsigned long flags;
+	bool refresh;
+	int nr = 0, i;
+
+	spin_lock_irqsave(&qs_affinity_lock, flags);
+	refresh = qs_refresh_pending;
+	qs_refresh_pending = false;
+	spin_unlock_irqrestore(&qs_affinity_lock, flags);
+
+	/* A bounded snapshot scan only when a user toggles the module parameter. */
+	if (refresh) {
+		rcu_read_lock();
+		for_each_process_thread(g, p) {
+			if (!mushroom_qs_cpuset_task(p))
+				continue;
+			get_task_struct(p);
+			snapshot[nr++] = p;
+			if (nr == QS_AFFINITY_SLOTS)
+				goto snapshot_done;
+		}
+snapshot_done:
+		rcu_read_unlock();
+		for (i = 0; i < nr; i++) {
+			qs_apply_affinity(snapshot[i]);
+			put_task_struct(snapshot[i]);
+		}
+	}
+	while ((p = qs_take_pending())) {
+		qs_apply_affinity(p);
+		put_task_struct(p);
+	}
+}
+static DECLARE_WORK(qs_affinity_work, qs_affinity_workfn);
+
+void mushroom_qs_cpuset_refresh(void)
+{
+	unsigned long flags;
+
+	if (!READ_ONCE(system_wq))
+		return;
+	spin_lock_irqsave(&qs_affinity_lock, flags);
+	qs_refresh_pending = true;
+	spin_unlock_irqrestore(&qs_affinity_lock, flags);
+	schedule_work(&qs_affinity_work);
+}
+
+void mushroom_qs_cpuset_kick(struct task_struct *p)
+{
+	struct cpuset *cs;
+	unsigned long flags;
+	bool eligible;
+	int i, empty = -1;
+
+	if (!READ_ONCE(system_wq) || !mushroom_qs_cpuset_task(p))
+		return;
+	rcu_read_lock();
+	cs = task_cs(p);
+	eligible = cs && cs->mushroom_display_background &&
+		parent_cs(cs) == &top_cpuset && !is_in_v2_mode() &&
+		!cpumask_subset(parent_cs(cs)->effective_cpus, p->cpus_ptr);
+	rcu_read_unlock();
+	if (!eligible)
+		return;
+
+	spin_lock_irqsave(&qs_affinity_lock, flags);
+	for (i = 0; i < QS_AFFINITY_SLOTS; i++) {
+		if (qs_pending[i] == p)
+			goto unlock;
+		if (!qs_pending[i] && empty < 0)
+			empty = i;
+	}
+	if (empty >= 0) {
+		get_task_struct(p);
+		qs_pending[empty] = p;
+	}
+unlock:
+	spin_unlock_irqrestore(&qs_affinity_lock, flags);
+	schedule_work(&qs_affinity_work);
+}
+#endif
 
 /**
  * update_tasks_cpumask - Update the cpumasks of tasks in the cpuset.
@@ -1661,6 +1833,11 @@ static void cpuset_attach(struct cgroup_taskset *tset)
 	    oldcs->mushroom_ui_class != MUSHROOM_UI_TOP_APP)
 		mushroom_ui_action();
 #endif
+#if defined(CONFIG_MUSHROOM_SCHED54) && defined(CONFIG_UCLAMP_TASK)
+	/* A foreground promotion is observable for existing processes as well. */
+	if (cs->mushroom_uclamp_class == 2 && oldcs->mushroom_uclamp_class != 2)
+		mushroom_input_boost_launch();
+#endif
 	mutex_unlock(&cpuset_mutex);
 }
 
@@ -2116,6 +2293,8 @@ static int cpuset_css_online(struct cgroup_subsys_state *css)
 	cs->mushroom_background = parent == &top_cpuset &&
 		(!strcmp(mushroom_name, "background") ||
 		 !strcmp(mushroom_name, "system-background"));
+	cs->mushroom_display_background = parent == &top_cpuset &&
+		!strcmp(mushroom_name, "system-background");
 #endif
 #ifdef CONFIG_MUSHROOM_UI
 	cs->mushroom_ui_class = parent->mushroom_ui_class;
@@ -2580,7 +2759,10 @@ void cpuset_cpus_allowed(struct task_struct *tsk, struct cpumask *pmask)
 
 	spin_lock_irqsave(&callback_lock, flags);
 	rcu_read_lock();
-	guarantee_online_cpus(task_cs(tsk), pmask);
+#ifdef MUSHROOM_QS_CPUSET
+	if (!mushroom_qs_cpuset_mask(task_cs(tsk), tsk, pmask))
+#endif
+		guarantee_online_cpus(task_cs(tsk), pmask);
 	rcu_read_unlock();
 	spin_unlock_irqrestore(&callback_lock, flags);
 }

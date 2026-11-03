@@ -26,6 +26,7 @@
 #include <trace/hooks/sched.h>
 
 #include "walt/walt.h"
+#include <linux/moduleparam.h>
 
 #ifdef CONFIG_SMP
 static inline bool task_fits_max(struct task_struct *p, int cpu);
@@ -137,6 +138,11 @@ __read_mostly unsigned int sysctl_sched_prefer_spread;
 unsigned int sysctl_walt_rtg_cfs_boost_prio = 99; /* disabled by default */
 unsigned int sysctl_walt_low_latency_task_threshold; /* disabled by default */
 unsigned int sysctl_mushroom_ui_prime = 1;
+#ifdef CONFIG_UCLAMP_TASK
+static bool mushroom_qs_idle_balance = true;
+module_param_named(qs_idle_balance, mushroom_qs_idle_balance, bool, 0644);
+MODULE_PARM_DESC(qs_idle_balance, "Permit Big/Prime idle balancing during display work");
+#endif
 unsigned int sysctl_sched_sync_hint_enable = 1;
 #endif
 unsigned int sched_small_task_threshold = 102;
@@ -3928,9 +3934,26 @@ struct find_best_target_env {
 	int skip_cpu;
 };
 
+/*
+ * r8q has 4+3+1 clusters: WALT clears its single-entry asymmetric-sibling
+ * mask. Keep the existing display window useful after a CFS task is
+ * preempted, instead of restricting the policy to wakeup CPU selection.
+ */
+static inline bool mushroom_qs_balance_cpu(int cpu)
+{
+#if defined(CONFIG_SCHED_WALT) && defined(CONFIG_UCLAMP_TASK)
+	return READ_ONCE(mushroom_qs_idle_balance) &&
+		mushroom_qs_active() && !is_min_capacity_cpu(cpu);
+#else
+	return false;
+#endif
+}
+
 static inline bool prefer_spread_on_idle(int cpu, bool new_ilb)
 {
 #ifdef CONFIG_SCHED_WALT
+	if (mushroom_qs_balance_cpu(cpu))
+		return true;
 	switch (sysctl_sched_prefer_spread) {
 	case 1:
 		return is_min_capacity_cpu(cpu);
@@ -7494,6 +7517,12 @@ select_task_rq_fair(struct task_struct *p, int prev_cpu, int sd_flag, int wake_f
 	if (target_cpu >= 0)
 		return target_cpu;
 
+	if (sd_flag == SD_BALANCE_WAKE && mushroom_qs_note_task(p)) {
+		target_cpu = mushroom_qs_pick_cpu(p, p->cpus_ptr, true);
+		if (target_cpu >= 0)
+			return target_cpu;
+	}
+
 	if (sched_energy_enabled()) {
 		rcu_read_lock();
 #ifdef CONFIG_SCHED_WALT
@@ -9955,7 +9984,9 @@ static struct sched_group *find_busiest_group(struct lb_env *env)
 		struct root_domain *rd = env->dst_rq->rd;
 
 #ifdef CONFIG_SCHED_WALT
-		if (rcu_dereference(rd->pd) && !sd_overutilized(env->sd)) {
+		if (rcu_dereference(rd->pd) && !sd_overutilized(env->sd) &&
+		    !(env->prefer_spread &&
+		      mushroom_qs_balance_cpu(env->dst_cpu))) {
 #else
 		int out_balance = 1;
 
@@ -10337,9 +10368,10 @@ static int load_balance(int this_cpu, struct rq *this_rq,
 	env.prefer_spread = (idle != CPU_NOT_IDLE &&
 				prefer_spread_on_idle(this_cpu,
 				idle == CPU_NEWLY_IDLE) &&
-				!((sd->flags & SD_ASYM_CPUCAPACITY) &&
-				 !cpumask_test_cpu(this_cpu,
-						 &asym_cap_sibling_cpus)));
+				(mushroom_qs_balance_cpu(this_cpu) ||
+				 !((sd->flags & SD_ASYM_CPUCAPACITY) &&
+				   !cpumask_test_cpu(this_cpu,
+						   &asym_cap_sibling_cpus))));
 #else
 	env.prefer_spread = false;
 #endif

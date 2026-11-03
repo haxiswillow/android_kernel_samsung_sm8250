@@ -101,6 +101,7 @@ struct cpu_sync{unsigned int input_boost_min;};static struct cpu_sync cpus[3];
 #define READ_ONCE(x) (x)
 #define per_cpu(n,c) cpus[c]
 #define max(a,b) ((a)>(b)?(a):(b))
+#define min(a,b) ((a)<(b)?(a):(b))
 #define for_each_cpu(c,m) for(c=0;c<(m);c++)
 static void cpufreq_verify_within_limits(struct cpufreq_policy *p,unsigned int lo,unsigned int hi){if(p->min<lo)p->min=lo;if(p->max>hi)p->max=hi;if(p->min>p->max)p->min=p->max;}
 '''+f+'''

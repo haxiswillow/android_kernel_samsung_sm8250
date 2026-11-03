@@ -1,0 +1,9 @@
+{
+  "variant": "su",
+  "epoch": 1793731857,
+  "configuration_sha256": "1ec0a4e319620403a868ac5f46910e0e48f3e6e4fd2f736b329c8c1b28591f1d",
+  "configuration_semantic_sha256": "d2ee84b62642e384de7cc02b2933a971b6413709022825006b4bc2ae3cff7c22",
+  "compiler": "Proton clang version 13.0.0 (https://github.com/llvm/llvm-project b4fd512c36ca344a3ff69350219e8b0a67e9472a)",
+  "approved_dist_config": "MushroomKernel-KSU-r8q-6aea2d11.config",
+  "note": "Source and configuration replay; timestamps and ZIP metadata can differ."
+}

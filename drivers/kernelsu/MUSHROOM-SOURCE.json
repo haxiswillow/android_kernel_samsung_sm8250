@@ -1,0 +1,12 @@
+{
+  "upstream": "https://github.com/Baka-SU/BakaSU",
+  "commit": "d7260ca1e5c128061122924d0d48754e361e135c",
+  "archive_sha256": "44aff6aecc7cb3b9e10207e56411016f165c5a39f39fa107ad4df6b54f774efc",
+  "version": 35229,
+  "tag": "v4.2.0-rc3",
+  "integration": "manual hooks; manager signatures preserved; UAPI vendored as regular files",
+  "local_changes": [
+    "pinned Kbuild metadata",
+    "CONFIG_SECCOMP guard"
+  ]
+}
